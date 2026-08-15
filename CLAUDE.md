@@ -45,6 +45,11 @@ docker compose up -d db
 - Pedido sobre **fonte de dados / ETL** → `src/etl/`, `docs/ARQUITETURA.md#etl`
 - Pedido sobre **schema / carteira** → `src/db/schema.sql`
 - Pedido sobre **regra de estratégia** → `skills/covered-options-strategy/SKILL.md`
+- Pedido sobre **data de resultado / risco de earnings** → `src/earnings/`.
+  A ordem de leitura é `models.py` (invariantes) → `confidence.py` (tiers de
+  provedor) → `resolution.py` (conflitos) → `risk.py` (o que o motor de
+  opções consome). Regra que atravessa tudo: estimativa nunca sobrescreve
+  confirmação
 - Pedido sobre **novo agente** → `.claude/agents/`, use `orchestrator.md` como
   referência de como os agentes se conectam
 - Pedido sobre **automação diária** → `.github/workflows/daily-etl.yml`
@@ -107,8 +112,21 @@ docker compose up -d db
       histórico — ver tarefa 2.5 da change `build-portfolio-mvp-flow`
 - [ ] `fetch_news.py` ainda não exercido contra um provedor real —
       `NEWS_API_KEY` não configurada
-- [ ] Fonte de calendário de resultados trimestrais ainda não integrada —
-      critério correspondente da skill sempre resulta em "dado insuficiente"
+- [x] **Earnings Event Service (Fase 1) implementado** em `src/earnings/`:
+      modelo (`models.py`), score de confiança (`confidence.py`), resolução
+      de conflitos (`resolution.py`), repositório, serviço e
+      `EarningsRiskService` (`risk.py`). Migração `001_earnings_events.sql`
+      aplicada e idempotente; `schema.sql` acompanha. 99 testes só desta
+      camada, incluindo integração contra o Postgres real (pulada
+      automaticamente sem banco). **Ainda não integrado ao
+      `strategy/covered.py`** — Fase 1 não toca na análise de opções por
+      decisão do escopo
+- [ ] Providers de earnings (Fase 2) ainda não implementados — só a
+      interface `EarningsProvider` existe. Ordem decidida após prova real
+      em 2026-08-15: `manual` → `cvm` → `yfinance`
+- [ ] Fonte de calendário de resultados trimestrais ainda não integrada ao
+      fluxo de estratégia — o critério da skill continua resultando em
+      "dado insuficiente" até a Fase 2 + integração
 - [ ] Não há, ainda, forma de registrar caixa/garantia disponível — covered
       put não é avaliado automaticamente contra a carteira real por isso
 - [ ] **`report/daily.py` nunca lê preço de mercado.** `cotacoes` só é

@@ -1,3 +1,16 @@
+> **NOTA (2026-08-15): esta change foi parcialmente superada.** A parte de
+> "fonte manual de datas de resultado" foi substituída, com escopo maior,
+> pelo Earnings Event Service já implementado em `src/earnings/` (modelo
+> multi-fonte, score de confiança, resolução de conflitos e
+> `EarningsRiskService`). A investigação que motivou a troca está em
+> `docs/` e no artefato de comparação de fontes.
+>
+> **O que desta change continua válido e pendente:** os itens (2) e (3) —
+> separar em `avaliar()` os campos de mercado do critério de resultado, dar
+> três estados ao critério, e a política configurável em `params.yaml`.
+> Nada disso foi feito: a Fase 1 do serviço deliberadamente não tocou em
+> `src/strategy/covered.py`. Reescrever esta change antes de aplicá-la.
+
 ## Why
 
 Hoje `executar_avaliacao_carteira()` **não consegue emitir nenhuma sugestão,

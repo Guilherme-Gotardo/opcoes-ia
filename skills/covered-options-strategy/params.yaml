@@ -9,3 +9,19 @@ dias_vencimento_max: 45
 premio_minimo_pct: 0.5        # % do valor da posição coberta
 exposicao_maxima_pct_ativo: 20 # % do patrimônio total em opções por ativo
 dias_bloqueio_antes_resultado: 7
+
+# --- Risco de resultado (Earnings Event Service) ---
+# Dias até a divulgação que classificam cada nível de risco. Precisam ser
+# crescentes; o serviço falha alto se não forem.
+earnings_risco_critical_dias: 1
+earnings_risco_high_dias: 3
+earnings_risco_medium_dias: 7
+earnings_risco_low_dias: 15
+
+# Confiança mínima (0–100) para que uma data de resultado seja usada numa
+# decisão. Abaixo disso o evento é tratado como "não temos data" — o que
+# BLOQUEIA de forma conservadora, em vez de aprovar com dado fraco.
+#   95–100 confirmado por RI/regulatório · 85–94 duas fontes concordam
+#   60–84  uma fonte confiável           · 30–59 só fonte secundária
+# 60 exige, na prática, pelo menos uma fonte confiável e recente.
+earnings_confianca_minima: 60
