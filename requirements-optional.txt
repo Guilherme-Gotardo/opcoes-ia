@@ -1,0 +1,9 @@
+# Dependências opcionais. O projeto roda sem nenhuma delas.
+#
+# Instale com:
+#     pip install -r requirements-optional.txt
+
+# YahooProvider (src/earnings/providers/yahoo.py) — fonte SECUNDÁRIA de
+# datas de resultado. Arrasta pandas/numpy. Sem ela, o provider levanta
+# ProviderIndisponivel e os providers `manual` e `cvm` seguem funcionando.
+yfinance>=0.2

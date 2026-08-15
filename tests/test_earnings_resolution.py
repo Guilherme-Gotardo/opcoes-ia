@@ -149,6 +149,22 @@ class TestResolucaoComConflito:
         ]
         assert resolver(fontes, AGORA).confidence < 95
 
+    def test_eco_secundario_nao_eleva_confirmacao_com_autoridade(self):
+        """100 é reservado para fato observado (RELEASED).
+
+        Uma confirmação de RI não fica mais verdadeira porque o Yahoo
+        repetiu a mesma data.
+        """
+        so_manual = resolver(
+            [src("manual", dt.date(2026, 10, 29), EarningsStatus.CONFIRMED)], AGORA
+        )
+        com_eco = resolver([
+            src("manual", dt.date(2026, 10, 29), EarningsStatus.CONFIRMED),
+            src("yfinance", dt.date(2026, 10, 29), EarningsStatus.ESTIMATED),
+        ], AGORA)
+        assert com_eco.confidence == so_manual.confidence
+        assert com_eco.confidence < 100
+
     def test_mesmo_provider_duas_vezes_nao_e_segunda_opiniao(self):
         fontes = [
             src("yfinance", dt.date(2026, 8, 20), EarningsStatus.ESTIMATED),

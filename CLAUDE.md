@@ -33,6 +33,12 @@ python -m src.etl.fetch_quotes
 python -m src.etl.fetch_options
 python -m src.etl.fetch_news
 
+# datas de divulgação de resultado (espelho manual — leia no site de RI)
+python -m src.earnings.manage add PETR4 2026-11-06 --sessao AFTER_CLOSE \
+    --origem https://petrobras.com.br/ri/calendario
+python -m src.earnings.manage list
+python -m src.earnings.manage remove PETR4 2026Q3
+
 # rodar testes
 pytest
 
@@ -121,9 +127,19 @@ docker compose up -d db
       automaticamente sem banco). **Ainda não integrado ao
       `strategy/covered.py`** — Fase 1 não toca na análise de opções por
       decisão do escopo
-- [ ] Providers de earnings (Fase 2) ainda não implementados — só a
-      interface `EarningsProvider` existe. Ordem decidida após prova real
-      em 2026-08-15: `manual` → `cvm` → `yfinance`
+- [x] **Providers de earnings (Fase 2) implementados**: `manual` (única
+      fonte com autoridade para `CONFIRMED`, alimentada por
+      `python -m src.earnings.manage`), `cvm` (dump IPE, só `RELEASED`) e
+      `yahoo` (secundária, `ESTIMATED`). Migração 002 criou
+      `earnings_manual_entries` e `ativos.cnpj_raiz`. Validados contra as
+      fontes reais em 2026-08-15: a CVM devolveu 4/5 divulgações do 2T26
+      (BBAS3 fora por causa da latência do dump) e o Yahoo 3/5 datas
+      futuras — exatamente o que a investigação previu
+- [ ] `ativos.cnpj_raiz` precisa estar preenchido para o `CvmProvider`
+      enxergar o ativo; sem ele o provider apenas avisa e pula. Já
+      cadastrados: PETR4, VALE3, ITUB4, BBAS3, ABEV3
+- [ ] Providers da Fase 3 (EODHD, Twelve Data) não implementados —
+      dependem de prova de cobertura B3 com plano pago
 - [ ] Fonte de calendário de resultados trimestrais ainda não integrada ao
       fluxo de estratégia — o critério da skill continua resultando em
       "dado insuficiente" até a Fase 2 + integração

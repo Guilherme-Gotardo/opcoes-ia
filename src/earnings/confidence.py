@@ -134,11 +134,18 @@ def score_consolidado(
 
     melhor = max(score_da_fonte(s, agora) for s in concordantes)
 
-    # Concordância só vale como reforço entre provedores DISTINTOS: o mesmo
+    # O bônus de concordância existe para LEVANTAR estimativa, não para
+    # somar em cima de quem já tem autoridade. Uma confirmação de RI não
+    # fica mais verdadeira porque o Yahoo repetiu a mesma data — e deixar
+    # somar empurraria um evento futuro confirmado até 100, score que é
+    # reservado para fato já observado (RELEASED).
+    #
+    # Concordância também só conta entre provedores DISTINTOS: o mesmo
     # provider consultado duas vezes não é uma segunda opinião.
-    provedores_distintos = {s.provider.strip().lower() for s in concordantes}
-    if len(provedores_distintos) >= 2:
-        melhor += BONUS_SEGUNDA_FONTE_CONCORDANTE
+    if _sem_autoridade(concordantes):
+        provedores_distintos = {s.provider.strip().lower() for s in concordantes}
+        if len(provedores_distintos) >= 2:
+            melhor += BONUS_SEGUNDA_FONTE_CONCORDANTE
 
     if _sem_autoridade(concordantes):
         # Sem fonte oficial/regulatória o evento não alcança a faixa

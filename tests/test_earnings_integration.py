@@ -183,6 +183,87 @@ class TestProximoEvento:
         assert e is not None and e.effective_date == dt.date(2026, 11, 6)
 
 
+class TestEntradaManual:
+    """CLI + ManualProvider contra o banco real."""
+
+    @pytest.fixture
+    def limpar_manuais(self):
+        yield
+        with psycopg.connect(os.environ["DATABASE_URL"]) as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM earnings_manual_entries WHERE ticker LIKE %s",
+                        (PREFIXO_TESTE + "%",))
+            conn.commit()
+
+    def test_registra_e_o_provider_le_de_volta(self, limpar_manuais):
+        from src.earnings.manage import add_data_resultado
+        from src.earnings.providers.manual import ManualProvider
+
+        t = PREFIXO_TESTE + "MAN"
+        periodo = add_data_resultado(
+            t, dt.date(2099, 11, 6), sessao=Session.AFTER_CLOSE,
+            origem="https://exemplo/ri",
+        )
+        assert periodo == "2099Q3"
+
+        fontes = ManualProvider().get_upcoming_earnings([t])
+        assert len(fontes) == 1
+        assert fontes[0].status == EarningsStatus.CONFIRMED
+        assert fontes[0].session == Session.AFTER_CLOSE
+        assert fontes[0].confidence == 97
+
+    def test_regravar_o_mesmo_trimestre_e_correcao_nao_duplicata(self, limpar_manuais):
+        from src.earnings.manage import add_data_resultado, list_datas_resultado
+        from src.earnings.providers.manual import ManualProvider
+
+        t = PREFIXO_TESTE + "COR"
+        add_data_resultado(t, dt.date(2099, 11, 6), fiscal_period="2099Q3")
+        add_data_resultado(t, dt.date(2099, 11, 13), fiscal_period="2099Q3")
+
+        assert len(list_datas_resultado(t)) == 1
+        fontes = ManualProvider().get_upcoming_earnings([t])
+        assert len(fontes) == 1
+        assert fontes[0].date == dt.date(2099, 11, 13), "a correção precisa prevalecer"
+
+    def test_data_invalida_e_rejeitada_sem_gravar(self, limpar_manuais):
+        from src.earnings.manage import EntradaInvalida, _parse_data, list_datas_resultado
+
+        with pytest.raises(EntradaInvalida, match="AAAA-MM-DD"):
+            _parse_data("06/11/2026")
+        assert list_datas_resultado(PREFIXO_TESTE + "INV") == []
+
+    def test_sessao_invalida_e_rejeitada(self):
+        from src.earnings.manage import EntradaInvalida, _parse_sessao
+
+        with pytest.raises(EntradaInvalida, match="sessão inválida"):
+            _parse_sessao("DEPOIS_DO_ALMOCO")
+
+    def test_remover_entrada_inexistente_falha_alto(self):
+        from src.earnings.manage import EntradaInvalida, remove_data_resultado
+
+        with pytest.raises(EntradaInvalida, match="nenhuma entrada"):
+            remove_data_resultado(PREFIXO_TESTE + "NAO", "2099Q9")
+
+    def test_manual_vence_yfinance_no_mesmo_evento(self, repo, limpar_manuais):
+        """A combinação que a Fase 2 entrega: RI confirma, Yahoo ecoa."""
+        from src.earnings.manage import add_data_resultado
+        from src.earnings.providers.manual import ManualProvider
+
+        t = PREFIXO_TESTE + "MIX"
+        add_data_resultado(t, dt.date(2099, 10, 29), fiscal_period="2099Q3",
+                           sessao=Session.AFTER_CLOSE)
+
+        fontes = ManualProvider().get_upcoming_earnings([t])
+        fontes.append(src(t, "yfinance", dt.date(2099, 10, 30), EarningsStatus.ESTIMATED))
+
+        e = EarningsEventService(repository=repo).registrar(
+            t, "2099Q3", fontes, agora=AGORA
+        )
+        assert e.confirmed_date == dt.date(2099, 10, 29)
+        assert e.status == EarningsStatus.CONFIRMED
+        assert e.session == Session.AFTER_CLOSE
+        assert dt.date(2099, 10, 30) in {s.date for s in e.sources}
+
+
 class TestFluxoAteORisco:
     """Do registro até a resposta que o motor de opções consome."""
 
