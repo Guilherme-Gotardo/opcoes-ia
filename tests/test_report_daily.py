@@ -149,3 +149,71 @@ def test_dois_dias_geram_dois_arquivos_distintos(tmp_path):
 
     assert caminho1 != caminho2
     assert caminho1.exists() and caminho2.exists()
+
+
+# --- Seção de avaliações bloqueadas por data de resultado -------------------
+
+def _bloqueio(ticker="PETR4", codigo="PETRI280"):
+    """Um ResultadoAvaliacao bloqueado, como `executar_avaliacao_carteira`
+    devolve quando os critérios de mercado passam mas falta a data."""
+    from src.strategy.covered import (
+        CriterioAvaliado,
+        EstadoCriterio,
+        ResultadoAvaliacao,
+    )
+    return ResultadoAvaliacao(
+        ticker_objeto=ticker, codigo_opcao=codigo, tipo_operacao="covered_call",
+        elegivel=False, bloqueado_por_resultado=True,
+        motivo_nao_elegivel="não verificável(is): dias_para_resultado",
+        strike=28.0, vencimento="2026-09-18", premio_estimado=0.95,
+        criterios=[
+            CriterioAvaliado("iv_rank", 62.0, "62.0 (mínimo 50)", EstadoCriterio.APROVADO),
+            CriterioAvaliado("dias_para_resultado", None,
+                             "data de resultado não verificável (política: bloquear)",
+                             EstadoCriterio.INDISPONIVEL),
+        ],
+    )
+
+
+def test_bloqueio_por_resultado_aparece_com_criterios_e_acao(tmp_path):
+    linhas: list[str] = []
+    daily._renderizar_bloqueios(linhas, [_bloqueio()])
+    texto = "\n".join(linhas)
+
+    assert "## Avaliações bloqueadas por data de resultado" in texto
+    assert "PETR4 — PETRI280" in texto
+    assert "iv_rank: 62.0 (mínimo 50) ✅" in texto, "critérios já verificados ficam visíveis"
+    assert "⚠️" in texto, "o critério indisponível não pode virar ❌"
+    assert "src.earnings.manage add PETR4" in texto, "precisa dizer como destravar"
+
+
+def test_sem_bloqueio_a_secao_nao_e_criada(tmp_path):
+    linhas: list[str] = []
+    daily._renderizar_bloqueios(linhas, [])
+    assert linhas == [], "seção vazia não deve ser gerada"
+
+
+def test_sugestao_sinalizada_exibe_aviso_de_agenda(tmp_path):
+    sugestao = {
+        "ticker_objeto": "PETR4", "tipo_operacao": "covered_call",
+        "codigo_opcao": "PETRI280", "strike": 28.0, "vencimento": "2026-09-18",
+        "premio_estimado": 0.95, "status": "pendente",
+        "criterios": {
+            "criterios": [
+                {"nome": "iv_rank", "valor": 62.0, "detalhe": "62 (mínimo 50)",
+                 "estado": "aprovado", "aprovado": True},
+                {"nome": "dias_para_resultado", "valor": None,
+                 "detalhe": "não verificável", "estado": "indisponivel",
+                 "aprovado": False},
+            ],
+            "aviso_resultado": "agenda de resultados NÃO verificada — confirme a data",
+        },
+    }
+    texto = daily._renderizar_markdown(
+        dt.date(2026, 8, 15),
+        {"posicoes": [], "total_patrimonio": 0, "exposicao_pct_por_ativo": {}},
+        [], [sugestao],
+    )
+    assert "agenda de resultados NÃO verificada" in texto
+    assert "Pendente de revisão humana" in texto, "o aviso soma, não substitui"
+    assert "dias_para_resultado: não verificável ⚠️" in texto

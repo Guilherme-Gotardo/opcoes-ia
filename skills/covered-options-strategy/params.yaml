@@ -10,6 +10,16 @@ premio_minimo_pct: 0.5        # % do valor da posição coberta
 exposicao_maxima_pct_ativo: 20 # % do patrimônio total em opções por ativo
 dias_bloqueio_antes_resultado: 7
 
+# O que fazer quando NÃO existe data de resultado confiável para o ativo:
+#   bloquear  (padrão) não emite sugestão, mas o relatório explica que o
+#             bloqueio foi por dado faltante e mostra os critérios que já
+#             passavam. Postura conservadora.
+#   sinalizar emite a sugestão com aviso explícito de que a agenda de
+#             resultados não foi verificada. Você assume conferir a data.
+# Reprovação em critério de mercado sempre vence: delta fora da faixa
+# reprova independentemente desta política.
+politica_resultado_desconhecido: bloquear
+
 # --- Risco de resultado (Earnings Event Service) ---
 # Dias até a divulgação que classificam cada nível de risco. Precisam ser
 # crescentes; o serviço falha alto se não forem.

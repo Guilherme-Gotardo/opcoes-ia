@@ -140,9 +140,25 @@ docker compose up -d db
       cadastrados: PETR4, VALE3, ITUB4, BBAS3, ABEV3
 - [ ] Providers da Fase 3 (EODHD, Twelve Data) não implementados —
       dependem de prova de cobertura B3 com plano pago
-- [ ] Fonte de calendário de resultados trimestrais ainda não integrada ao
-      fluxo de estratégia — o critério da skill continua resultando em
-      "dado insuficiente" até a Fase 2 + integração
+- [x] **Critério de resultado integrado ao `strategy/covered.py`**: o
+      critério tem três estados (`aprovado`/`reprovado`/`indisponivel`) e
+      deixou de curto-circuitar a avaliação. Política configurável em
+      `politica_resultado_desconhecido` (`bloquear` padrão | `sinalizar`).
+      Reprovação no mérito sempre vence a política. O relatório ganhou a
+      seção "Avaliações bloqueadas por data de resultado", com os critérios
+      já verificados e o comando que destrava. **Validado de ponta a ponta
+      em 2026-08-15 com opção sintética (`fonte='sintetico'`): sem data
+      registrada o relatório mostra o bloqueio; com data registrada o
+      sistema emitiu a primeira sugestão da sua história**
+- [ ] **`exposicao_maxima_pct_ativo` inviabiliza covered call em carteira
+      pequena.** `_exposicao_pct_apos_operacao` conta o notional cheio
+      (`strike × 100`) como exposição nova, mas numa covered call esse
+      notional já está coberto pelas ações em carteira — é contagem dupla.
+      Com patrimônio de R$ 14.250 e limite de 20%, o strike máximo que
+      passa é R$ 28,50, enquanto PETR4 negocia a R$ 42: nenhuma covered
+      call do ativo pode passar. Precisa decidir se a exposição de uma
+      operação coberta deve contar como notional, como prêmio, ou como
+      zero
 - [ ] Não há, ainda, forma de registrar caixa/garantia disponível — covered
       put não é avaliado automaticamente contra a carteira real por isso
 - [ ] **`report/daily.py` nunca lê preço de mercado.** `cotacoes` só é

@@ -127,7 +127,50 @@ def _sugestoes_do_dia(cur, data: dt.date) -> list[dict]:
     return sugestoes
 
 
-def _renderizar_markdown(data: dt.date, resumo: dict, alertas: list[str], sugestoes: list[dict]) -> str:
+def _renderizar_bloqueios(linhas: list[str], bloqueios: list) -> None:
+    """Seção das avaliações barradas por data de resultado não verificável.
+
+    Existe porque "nenhuma sugestão hoje" sem explicação é indistinguível
+    de "nada valia a pena" — e as duas coisas exigem ações opostas do
+    usuário. Aqui ele vê o quão perto a oportunidade estava e o que
+    destrava.
+    """
+    if not bloqueios:
+        return
+    linhas.append("## Avaliações bloqueadas por data de resultado")
+    linhas.append("")
+    linhas.append(
+        "Estas opções passaram nos critérios de mercado, mas não há data de "
+        "divulgação de resultado confiável para o ativo. Registre a data "
+        "lida no site de RI para destravar:"
+    )
+    linhas.append("")
+    for b in bloqueios:
+        linhas.append(f"### {b.ticker_objeto} — {b.codigo_opcao}")
+        linhas.append(
+            f"Strike: {b.strike} | Vencimento: {b.vencimento} | "
+            f"Prêmio estimado: {b.premio_estimado}"
+        )
+        for c in b.criterios:
+            if c.indisponivel:
+                marca = "⚠️"
+            elif c.aprovado:
+                marca = "✅"
+            else:
+                marca = "❌"
+            linhas.append(f"  - {c.nome}: {c.detalhe} {marca}")
+        linhas.append("")
+        linhas.append(
+            f"  → destrave com: `python -m src.earnings.manage add "
+            f"{b.ticker_objeto} AAAA-MM-DD --sessao AFTER_CLOSE --origem <url do RI>`"
+        )
+        linhas.append("")
+
+
+def _renderizar_markdown(
+    data: dt.date, resumo: dict, alertas: list[str], sugestoes: list[dict],
+    bloqueios: list | None = None,
+) -> str:
     linhas = [f"# Relatório diário — {data.isoformat()}", ""]
 
     linhas.append("## Carteira atual")
@@ -157,6 +200,8 @@ def _renderizar_markdown(data: dt.date, resumo: dict, alertas: list[str], sugest
             linhas.append(f"- ⚠️ {a}")
     linhas.append("")
 
+    _renderizar_bloqueios(linhas, bloqueios or [])
+
     linhas.append("## Sugestões")
     if not sugestoes:
         linhas.append("Nenhuma sugestão hoje.")
@@ -170,16 +215,26 @@ def _renderizar_markdown(data: dt.date, resumo: dict, alertas: list[str], sugest
                 f"Prêmio estimado: {s['premio_estimado']}"
             )
             linhas.append("**Pendente de revisão humana — nenhuma ordem foi executada.**")
+            aviso = s["criterios"].get("aviso_resultado")
+            if aviso:
+                linhas.append(f"⚠️ **{aviso}**")
             criterios = s["criterios"].get("criterios", [])
             for c in criterios:
-                marca = "✅" if c.get("aprovado") else "❌"
+                if c.get("estado") == "indisponivel":
+                    marca = "⚠️"
+                elif c.get("aprovado"):
+                    marca = "✅"
+                else:
+                    marca = "❌"
                 linhas.append(f"  - {c.get('nome')}: {c.get('detalhe')} {marca}")
             linhas.append("")
 
     return "\n".join(linhas) + "\n"
 
 
-def gerar_relatorio(data: dt.date | None = None) -> Path:
+def gerar_relatorio(
+    data: dt.date | None = None, avaliacoes: list | None = None
+) -> Path:
     # Convenção do projeto: todo timestamp é UTC (ver cabeçalho de
     # schema.sql). `coletado_em` é gravado e lido em UTC, então o "dia" do
     # relatório também precisa ser UTC — usar a data local aqui causaria
@@ -194,7 +249,13 @@ def gerar_relatorio(data: dt.date | None = None) -> Path:
         alertas = _alertas(cur, resumo["posicoes"], data)
         sugestoes = _sugestoes_do_dia(cur, data)
 
-    conteudo = _renderizar_markdown(data, resumo, alertas, sugestoes)
+    # `avaliacoes` vem de `executar_avaliacao_carteira()`, que já retorna
+    # todos os resultados — inclusive os não elegíveis. Reaproveitamos em
+    # vez de reavaliar. Sem esse argumento o relatório segue funcionando,
+    # só não mostra a seção de bloqueios.
+    bloqueios = [a for a in (avaliacoes or []) if a.bloqueado_por_resultado]
+
+    conteudo = _renderizar_markdown(data, resumo, alertas, sugestoes, bloqueios)
     caminho.write_text(conteudo, encoding="utf-8")
     log.info("Relatório gerado: %s", caminho)
     return caminho

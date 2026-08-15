@@ -1,6 +1,12 @@
 """Testes da função pura `avaliar` de src.strategy.covered — cobre os
 critérios da skill covered-options-strategy sem precisar de banco."""
-from src.strategy.covered import avaliar
+import pytest
+
+from src.strategy.covered import (
+    EstadoCriterio,
+    PoliticaInvalida,
+    avaliar,
+)
 
 PARAMS = {
     "iv_rank_minimo": 50,
@@ -56,12 +62,78 @@ def test_avaliar_marca_dado_insuficiente_quando_delta_ausente():
     assert "delta" in resultado.motivo_nao_elegivel
 
 
-def test_avaliar_marca_dado_insuficiente_quando_dias_para_resultado_ausente():
+def test_data_de_resultado_ausente_nao_aborta_a_avaliacao():
+    """Antes, um `dias_para_resultado` nulo reprovava por "dado
+    insuficiente" ANTES de olhar IV rank ou delta — nenhuma sugestão podia
+    ser emitida, nunca. Agora os demais critérios são avaliados e ficam
+    visíveis; só o critério de resultado fica indisponível."""
     opcao_sem_calendario = dict(OPCAO_CALL_BOA)
     opcao_sem_calendario["dias_para_resultado"] = None
     resultado = avaliar(POSICAO_COM_LOTE, opcao_sem_calendario, PARAMS)
+
+    assert resultado.elegivel is False, "política padrão é bloquear"
+    assert resultado.bloqueado_por_resultado is True
+    assert "não verificável" in resultado.motivo_nao_elegivel
+    assert "dado insuficiente" not in resultado.motivo_nao_elegivel
+
+    # Os cinco critérios de mercado foram efetivamente avaliados.
+    de_mercado = [c for c in resultado.criterios if c.nome != "dias_para_resultado"]
+    assert len(de_mercado) == 5
+    assert all(c.aprovado for c in de_mercado)
+
+    criterio_resultado = next(
+        c for c in resultado.criterios if c.nome == "dias_para_resultado"
+    )
+    assert criterio_resultado.indisponivel is True
+    assert criterio_resultado.aprovado is False, "indisponível nunca conta como aprovado"
+
+
+def test_politica_sinalizar_emite_sugestao_com_aviso():
+    params = dict(PARAMS, politica_resultado_desconhecido="sinalizar")
+    opcao = dict(OPCAO_CALL_BOA, dias_para_resultado=None)
+    resultado = avaliar(POSICAO_COM_LOTE, opcao, params)
+
+    assert resultado.elegivel is True
+    assert resultado.bloqueado_por_resultado is False
+    assert "NÃO verificada" in resultado.aviso_resultado
+
+
+def test_reprovacao_no_merito_vence_a_politica_sinalizar():
+    """Delta fora da faixa reprova mesmo sob `sinalizar`."""
+    params = dict(PARAMS, politica_resultado_desconhecido="sinalizar")
+    opcao = dict(OPCAO_CALL_BOA, delta=0.85, dias_para_resultado=None)
+    resultado = avaliar(POSICAO_COM_LOTE, opcao, params)
+
     assert resultado.elegivel is False
-    assert "dado insuficiente" in resultado.motivo_nao_elegivel
+    assert resultado.bloqueado_por_resultado is False, (
+        "foi reprovado no mérito, não bloqueado por falta de dado"
+    )
+    assert "delta" in resultado.motivo_nao_elegivel
+    assert "não verificável" in resultado.motivo_nao_elegivel
+
+
+def test_resultado_proximo_demais_reprova_normalmente():
+    opcao = dict(OPCAO_CALL_BOA, dias_para_resultado=3)
+    resultado = avaliar(POSICAO_COM_LOTE, opcao, PARAMS)
+    assert resultado.elegivel is False
+    assert resultado.bloqueado_por_resultado is False
+    criterio = next(c for c in resultado.criterios if c.nome == "dias_para_resultado")
+    assert criterio.estado is EstadoCriterio.REPROVADO
+
+
+def test_politica_invalida_falha_alto():
+    params = dict(PARAMS, politica_resultado_desconhecido="talvez")
+    with pytest.raises(PoliticaInvalida, match="talvez"):
+        avaliar(POSICAO_COM_LOTE, dict(OPCAO_CALL_BOA), params)
+
+
+def test_criterios_json_expoe_os_tres_estados():
+    opcao = dict(OPCAO_CALL_BOA, dias_para_resultado=None)
+    dados = avaliar(POSICAO_COM_LOTE, opcao, PARAMS).criterios_json()
+    estados = {c["nome"]: c["estado"] for c in dados["criterios"]}
+    assert estados["dias_para_resultado"] == "indisponivel"
+    assert estados["iv_rank"] == "aprovado"
+    assert dados["bloqueado_por_resultado"] is True
 
 
 def test_avaliar_covered_put_com_caixa_suficiente():
