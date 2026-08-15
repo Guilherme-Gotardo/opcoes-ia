@@ -1,0 +1,11 @@
+# Parâmetros da skill covered-options-strategy.
+# Ajuste aqui conforme seu perfil de risco — não hardcode esses valores em código.
+
+iv_rank_minimo: 50
+delta_min: 0.20
+delta_max: 0.35
+dias_vencimento_min: 20
+dias_vencimento_max: 45
+premio_minimo_pct: 0.5        # % do valor da posição coberta
+exposicao_maxima_pct_ativo: 20 # % do patrimônio total em opções por ativo
+dias_bloqueio_antes_resultado: 7

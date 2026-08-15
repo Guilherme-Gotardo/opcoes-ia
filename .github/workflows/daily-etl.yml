@@ -1,0 +1,39 @@
+name: ETL diário
+
+on:
+  schedule:
+    # 21:10 UTC ≈ 18:10 horário de Brasília (após o fechamento da B3)
+    - cron: "10 21 * * 1-5"
+  workflow_dispatch: {}   # permite rodar manualmente pelo GitHub também
+
+jobs:
+  etl:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      OPLAB_TOKEN: ${{ secrets.OPLAB_TOKEN }}
+      BRAPI_TOKEN: ${{ secrets.BRAPI_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Coletar cotações
+        run: python -m src.etl.fetch_quotes
+
+      - name: Coletar opções
+        run: python -m src.etl.fetch_options
+
+      - name: Coletar notícias
+        run: python -m src.etl.fetch_news
+        continue-on-error: true  # ainda não integrado a uma fonte real
+
+# Pré-requisito: cadastrar DATABASE_URL, OPLAB_TOKEN e BRAPI_TOKEN em
+# Settings > Secrets and variables > Actions no repositório do GitHub.
+# O banco precisa estar acessível pela internet (ex: um Postgres gerenciado
+# como Supabase/Neon/RDS) — não um Postgres só local via docker-compose.

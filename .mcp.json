@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "brapi": {
+      "type": "http",
+      "url": "https://brapi.dev/api/mcp/mcp",
+      "headers": {
+        "Authorization": "Bearer ${BRAPI_TOKEN}"
+      }
+    }
+  }
+}
