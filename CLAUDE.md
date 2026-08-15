@@ -78,15 +78,30 @@ docker compose up -d db
       contra a API, mas o carregamento pelo agente dentro do Claude Code
       ainda não foi exercido de ponta a ponta (normalmente exige nova
       sessão)
+- [ ] **Metade das tools do `market-analyst` não funciona no plano Free**
+      (testado tool a tool em 2026-08-15): `get_stock_dividends`,
+      `get_macro_series`, `get_macro_series_latest`, `get_inflation_data`
+      e `get_prime_rate_data` retornam `403` exigindo o plano Startup
+      (R$119,99/mês). Só `get_stock_profile` e os lookups de ticker
+      respondem 200 (1 ativo por requisição, mesma restrição do
+      `fetch_quotes`). A lista de tools em
+      `.claude/agents/market-analyst.md` precisa ser podada ou o agente
+      precisa tratar 403 como "dado indisponível" explícito
 - [x] Banco local (`docker compose up -d db` + `schema.sql`) validado de
       ponta a ponta em 2026-08-14 com posição de teste, cotação real,
       avaliação de estratégia e relatório diário — ver tarefa 6.1 da change
       `build-portfolio-mvp-flow` para detalhes e o bug de fuso horário
       (UTC vs. local) corrigido em `report/daily.py`
 - [ ] `fetch_options.py` ainda não trocado de OpLab para os endpoints reais
-      de opções da Brapi — bloqueado no plano Free do usuário (confirmado:
-      `403 FEATURE_NOT_AVAILABLE` para qualquer ticker além do sandbox
-      `PETR4`); precisa de upgrade para o plano Pro (R$139,99/mês). Achado
+      de opções da Brapi — bloqueado no plano Free do usuário: `403
+      FEATURE_NOT_AVAILABLE` em **todos** os endpoints de opções
+      (`expirations`, `chain`, `strikes`, `analytics`), **inclusive para
+      `PETR4`**. Reconfirmado em 2026-08-15 via REST (token na query e
+      header Bearer) e via MCP. **Não existe mais sandbox de opções** — a
+      anotação anterior de que `PETR4` era sandbox público está errada e
+      foi corrigida; o único dado aberto é um teaser de 1 série dentro do
+      corpo do próprio 403 (sem delta, sem `iv_rank`), inútil para montar
+      cadeia. Precisa de upgrade para o plano Pro (R$139,99/mês). Achado
       adicional: o endpoint de analytics da Brapi não retorna `iv_rank`
       pronto (só gregas + IV), precisaria ser calculado a partir do
       histórico — ver tarefa 2.5 da change `build-portfolio-mvp-flow`
@@ -96,6 +111,22 @@ docker compose up -d db
       critério correspondente da skill sempre resulta em "dado insuficiente"
 - [ ] Não há, ainda, forma de registrar caixa/garantia disponível — covered
       put não é avaliado automaticamente contra a carteira real por isso
+- [ ] **`report/daily.py` nunca lê preço de mercado.** `cotacoes` só é
+      consultada em `_ultima_coleta` (frescor); `_resumo_carteira` valoriza
+      tudo por `preco_medio` (custo de entrada). No teste de fluxo de
+      2026-08-15 o relatório mostrou R$ 14.250 contra R$ 18.469 a mercado
+      (~30% abaixo). Consequência: hoje o `fetch_quotes` é o único passo
+      com dado real e não influencia nenhuma saída além de suprimir um
+      alerta. Mesmo problema em `_exposicao_pct_apos_operacao`
+      (`strategy/covered.py`), que roda o critério de risco
+      `exposicao_maxima_pct_ativo` sobre custo, não sobre mercado
+- [ ] **`executar_avaliacao_carteira()` não consegue emitir sugestão nem
+      com dados de opções perfeitos**: `_opcoes_call_candidatas` fixa
+      `dias_para_resultado = None` (gap do calendário de resultados), e
+      `avaliar()` trata qualquer campo obrigatório nulo como "dado
+      insuficiente" — todo par posição×opção é reprovado antes de olhar
+      IV rank ou delta. O gap do calendário curto-circuita a avaliação
+      inteira, não é só um critério a menos
 - [ ] `python-dotenv` está em `requirements.txt` mas nenhum módulo chama
       `load_dotenv()` — hoje é preciso exportar as variáveis de `.env` no
       shell manualmente antes de rodar qualquer comando (`python -m

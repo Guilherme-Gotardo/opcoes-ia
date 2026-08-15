@@ -57,12 +57,21 @@
       usados na implementação original contra OpLab, reaplicados ao novo
       formato de resposta. **BLOQUEADO: confirmado em 2026-08-14 que o
       plano Free do usuário recebe `403 FEATURE_NOT_AVAILABLE`
-      (`canAccessOptionsData`) para qualquer ticker além de `PETR4`
-      (sandbox público, não é liberação do plano) — só destrava contra a
-      carteira real com upgrade para o plano Pro (R$139,99/mês). Endpoint e
-      formato de bloqueio já confirmados; integração com OpLab fica adiada
-      para uma change futura. **Achado adicional confirmado via sandbox
-      PETR4 em 2026-08-15:** o endpoint `/api/v2/options/analytics` da
+      (`canAccessOptionsData`) — só destrava com upgrade para o plano Pro
+      (R$139,99/mês). Endpoint e formato de bloqueio já confirmados;
+      integração com OpLab fica adiada para uma change futura.
+      **CORREÇÃO (2026-08-15, reteste ao vivo):** a afirmação anterior de
+      que `PETR4` era um sandbox público liberado NÃO se sustenta. Os
+      quatro endpoints (`expirations`, `chain`, `strikes`, `analytics`)
+      retornam 403 para `PETR4` também, tanto via REST (token na query e
+      via header `Authorization: Bearer`) quanto via MCP. O controle
+      `/api/quote/PETR4` retorna 200, confirmando que o token é válido e
+      que o bloqueio é de entitlement, não de credencial. O único dado
+      aberto é um `preview` de 1 série embutido no corpo do 403
+      (`PETRH412`, strike 41, venc. 2026-08-21, IV 0.3184) — sem delta e
+      sem `iv_rank`, insuficiente para montar cadeia ou alimentar a skill.
+      **Achado adicional (registrado antes via PETR4, segue válido):** o
+      endpoint `/api/v2/options/analytics` da
       Brapi retorna `delta/gamma/theta/vega/rho/impliedVolatility`, mas
       NÃO retorna `iv_rank` (percentil da IV atual vs. histórico) — a
       skill `covered-options-strategy` exige `iv_rank` como critério.
