@@ -249,7 +249,7 @@ def test_openapi_cobre_a_superficie_de_leitura():
     schema = app.openapi()
     assert set(schema["paths"]) >= {
         "/carteira", "/cotacoes", "/sugestoes", "/desfecho",
-        "/resultados", "/operacao", "/parametros",
+        "/resultados", "/saude-coleta", "/parametros", "/operacoes",
     }
     assert set(schema["paths"]["/resultados"]) == {"get"}, "leitura, nunca escrita"
     # Campos com nome e tipo úteis para o gerador de TypeScript.
@@ -399,7 +399,7 @@ def test_resultados_declaram_a_politica_vigente():
 
 # --- /operacao --------------------------------------------------------------
 
-def _dispatch_operacao(cotacoes=(), opcoes=(), noticias=(), earnings=(),
+def _dispatch_saude(cotacoes=(), opcoes=(), noticias=(), earnings=(),
                        avaliacao=None, gastos=0):
     def dispatch(query, params):
         # A query do orçamento também cita `cotacoes`; reconhecer antes.
@@ -427,15 +427,15 @@ def _orcamento_de(limite):
         yield
 
 
-def test_operacao_reporta_ultima_entrega_por_canal_e_fonte():
-    cliente, cursor, conn, patches = _cliente(_dispatch_operacao(
+def test_saude_coleta_reporta_ultima_entrega_por_canal_e_fonte():
+    cliente, cursor, conn, patches = _cliente(_dispatch_saude(
         cotacoes=[("brapi", AGORA, 2)],
         earnings=[("manual", AGORA, 1), ("cvm", None, 0)],
         avaliacao=AGORA,
         gastos=12,
     ))
     with patches[0], patches[1], _orcamento_de(600):
-        corpo = cliente.get("/operacao").json()
+        corpo = cliente.get("/saude-coleta").json()
 
     canais = {(c["canal"], c["fonte"]): c for c in corpo["coletas"]}
     assert canais[("cotações", "brapi")]["registros_hoje"] == 2
@@ -445,10 +445,10 @@ def test_operacao_reporta_ultima_entrega_por_canal_e_fonte():
     _sem_escrita(cursor, conn)
 
 
-def test_operacao_orcamento_usa_o_limite_configurado():
-    cliente, cursor, conn, patches = _cliente(_dispatch_operacao(gastos=45))
+def test_saude_coleta_orcamento_usa_o_limite_configurado():
+    cliente, cursor, conn, patches = _cliente(_dispatch_saude(gastos=45))
     with patches[0], patches[1], _orcamento_de(600):
-        orcamento = cliente.get("/operacao").json()["orcamento"]
+        orcamento = cliente.get("/saude-coleta").json()["orcamento"]
 
     assert orcamento["limite_diario"] == 600
     assert orcamento["gastos_hoje"] == 45
@@ -457,20 +457,20 @@ def test_operacao_orcamento_usa_o_limite_configurado():
     _sem_escrita(cursor, conn)
 
 
-def test_operacao_orcamento_estourado_nunca_fica_negativo():
-    cliente, cursor, conn, patches = _cliente(_dispatch_operacao(gastos=900))
+def test_saude_coleta_orcamento_estourado_nunca_fica_negativo():
+    cliente, cursor, conn, patches = _cliente(_dispatch_saude(gastos=900))
     with patches[0], patches[1], _orcamento_de(600):
-        orcamento = cliente.get("/operacao").json()["orcamento"]
+        orcamento = cliente.get("/saude-coleta").json()["orcamento"]
     assert orcamento["restante_hoje"] == 0
     _sem_escrita(cursor, conn)
 
 
-def test_operacao_declara_que_nao_rastreia_falhas():
+def test_saude_coleta_declara_que_nao_rastreia_falhas():
     """O limite honesto no próprio contrato: sem entrega recente pode ser
     fonte quebrada OU dia sem novidade, e o banco não distingue."""
-    cliente, cursor, conn, patches = _cliente(_dispatch_operacao())
+    cliente, cursor, conn, patches = _cliente(_dispatch_saude())
     with patches[0], patches[1], _orcamento_de(600):
-        corpo = cliente.get("/operacao").json()
+        corpo = cliente.get("/saude-coleta").json()
     assert corpo["rastreia_falhas"] is False
     _sem_escrita(cursor, conn)
 
@@ -563,3 +563,113 @@ def test_candles_de_ticker_sem_serie_e_lista_vazia_com_sucesso():
     assert r.json()["velas"] == []
     assert r.json()["intervalos_disponiveis"] == []
     _sem_escrita(cursor, conn)
+
+
+# --- /operacoes -------------------------------------------------------------
+
+def _dispatch_operacoes(posicoes=(), precos_medios=(), n_opcoes=0, cotacao=None):
+    def dispatch(query, params):
+        if "tipo_ativo = 'OPCAO'" in query:
+            return list(posicoes)
+        if "GROUP BY ticker" in query:
+            return list(precos_medios)
+        if "COUNT(*) FROM opcoes" in query:
+            return (n_opcoes,)
+        if "FROM cotacoes" in query:
+            return cotacao
+        raise AssertionError(f"query não esperada: {query}")
+    return dispatch
+
+
+def _posicao_opcao(**kw):
+    base = dict(
+        pid=1, codigo="PETRJ400", objeto="PETR4", qtd=-100, premio=0.92,
+        strike=40.0, venc=dt.date(2026, 9, 18), aberta=AGORA, fechada=None,
+        motivo=None, preco_fech=None,
+    )
+    base.update(kw)
+    return tuple(base.values())
+
+
+def test_operacao_aberta_mostra_distancia_do_strike():
+    """A pergunta central da venda coberta: a ação passou do strike?"""
+    cliente, cursor, conn, patches = _cliente(_dispatch_operacoes(
+        posicoes=[_posicao_opcao()],
+        precos_medios=[("PETR4", 35.35)],
+        cotacao=(42.09, AGORA),
+    ))
+    with patches[0], patches[1]:
+        corpo = cliente.get("/operacoes").json()
+
+    op = corpo["operacoes"][0]
+    assert op["preco_objeto"] == 42.09
+    assert op["dentro_do_dinheiro"] is True
+    assert op["distancia_do_strike_pct"] == pytest.approx(5.225, abs=1e-3)
+    _sem_escrita(cursor, conn)
+
+
+def test_operacao_aberta_traz_cenarios_e_nenhum_resultado_realizado():
+    """Sem cotação de opção não há marcação a mercado — o honesto é mostrar
+    os desfechos possíveis, não inventar um valor 'atual'."""
+    cliente, cursor, conn, patches = _cliente(_dispatch_operacoes(
+        posicoes=[_posicao_opcao()],
+        precos_medios=[("PETR4", 35.35)],
+        cotacao=(42.09, AGORA),
+    ))
+    with patches[0], patches[1]:
+        op = cliente.get("/operacoes").json()["operacoes"][0]
+
+    assert op["resultado_liquido"] == 0.0
+    assert any("em aberto" in r for r in op["ressalvas"])
+    nomes = [c["nome"] for c in op["cenarios"]]
+    assert nomes == ["expira sem exercício", "exercida"]
+    _sem_escrita(cursor, conn)
+
+
+def test_opcao_sem_strike_degrada_sem_quebrar():
+    """Posição registrada antes dos campos de opção continua aparecendo,
+    só que sem o que depende deles."""
+    cliente, cursor, conn, patches = _cliente(_dispatch_operacoes(
+        posicoes=[_posicao_opcao(strike=None, venc=None, objeto=None)],
+    ))
+    with patches[0], patches[1]:
+        op = cliente.get("/operacoes").json()["operacoes"][0]
+
+    assert op["distancia_do_strike_pct"] is None
+    assert op["dias_para_vencimento"] is None
+    assert [c["nome"] for c in op["cenarios"]] == ["expira sem exercício"]
+    _sem_escrita(cursor, conn)
+
+
+def test_operacao_encerrada_traz_resultado_e_pernas():
+    cliente, cursor, conn, patches = _cliente(_dispatch_operacoes(
+        posicoes=[_posicao_opcao(motivo="expirada", fechada=AGORA)],
+        precos_medios=[("PETR4", 35.35)],
+        cotacao=(42.09, AGORA),
+    ))
+    with patches[0], patches[1]:
+        op = cliente.get("/operacoes").json()["operacoes"][0]
+
+    assert op["resultado_bruto"] == pytest.approx(92.0)
+    assert op["pernas"][0]["nome"] == "opção"
+    assert op["cenarios"] == [], "operação fechada não tem cenário hipotético"
+    _sem_escrita(cursor, conn)
+
+
+def test_operacoes_declaram_que_nao_ha_marcacao_a_mercado_da_opcao():
+    """`opcoes` fica vazia enquanto o ETL está bloqueado no plano Free — a
+    resposta diz isso em vez de deixar a interface supor."""
+    cliente, cursor, conn, patches = _cliente(_dispatch_operacoes(n_opcoes=0))
+    with patches[0], patches[1]:
+        corpo = cliente.get("/operacoes").json()
+    assert corpo["tem_cotacao_de_opcao"] is False
+    _sem_escrita(cursor, conn)
+
+
+def test_resultado_de_operacao_e_sempre_estimativa():
+    cliente, cursor, conn, patches = _cliente(_dispatch_operacoes(
+        posicoes=[_posicao_opcao(motivo="expirada", fechada=AGORA)],
+    ))
+    with patches[0], patches[1]:
+        op = cliente.get("/operacoes").json()["operacoes"][0]
+    assert op["estimativa"] is True

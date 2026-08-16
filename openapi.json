@@ -144,7 +144,7 @@
           "carteira"
         ],
         "summary": "Encerrar Posicao",
-        "description": "Marca `fechada_em`. A linha NUNCA é removida: o histórico é o que\npermite explicar uma decisão passada meses depois.",
+        "description": "Marca `fechada_em` com o desfecho. A linha NUNCA é removida: o\nhistórico é o que permite explicar uma decisão passada meses depois.\n\nExige corpo com o motivo — o que também serve de confirmação: encerrar\né irreversível pela interface (não existe reabrir), e um POST vazio\ntornava perda de dado a um clique de distância.",
         "operationId": "encerrar_posicao_posicoes__posicao_id__encerrar_post",
         "parameters": [
           {
@@ -157,6 +157,16 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EncerramentoEntrada"
+              }
+            }
+          }
+        },
         "responses": {
           "204": {
             "description": "Successful Response"
@@ -304,18 +314,18 @@
         }
       }
     },
-    "/operacao": {
+    "/saude-coleta": {
       "get": {
-        "summary": "Operacao",
+        "summary": "Saude Coleta",
         "description": "Quando cada fonte entregou dado pela última vez, e quanto do\norçamento diário de requests já foi gasto.\n\nNÃO é um log de execução — o projeto não grava tentativa, erro nem\nduração em lugar nenhum. Por isso a resposta carrega\n`rastreia_falhas=False`: ausência de entrega recente aqui significa\n\"não gravou nada\", que pode ser fonte quebrada ou simplesmente dia sem\nnovidade, e o banco não sabe qual dos dois.",
-        "operationId": "operacao_operacao_get",
+        "operationId": "saude_coleta_saude_coleta_get",
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OperacaoResposta"
+                  "$ref": "#/components/schemas/SaudeColetaResposta"
                 }
               }
             }
@@ -376,6 +386,25 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/operacoes": {
+      "get": {
+        "summary": "Operacoes",
+        "description": "Operações de opção — abertas e encerradas — com resultado estimado.\n\nNÃO há marcação a mercado da opção: o ETL de opções está bloqueado no\nplano Free do provedor e `opcoes` fica vazia. O que se usa é a cotação\ndo ATIVO-OBJETO, que responde a pergunta central da venda coberta (\"a\nação passou do strike?\") sem precisar do preço da opção. A resposta\ndeclara esse limite em `tem_cotacao_de_opcao`.",
+        "operationId": "operacoes_operacoes_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperacoesResposta"
                 }
               }
             }
@@ -483,6 +512,49 @@
         ],
         "title": "AtivoResposta"
       },
+      "CanalColetaResposta": {
+        "properties": {
+          "canal": {
+            "type": "string",
+            "title": "Canal",
+            "description": "O que é coletado: cotações, opções, notícias, resultados"
+          },
+          "fonte": {
+            "type": "string",
+            "title": "Fonte"
+          },
+          "ultima_entrega_em": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ultima Entrega Em",
+            "description": "Última vez que esta fonte GRAVOU dado. Não é 'última tentativa': uma falha não deixa rastro no banco"
+          },
+          "registros_hoje": {
+            "type": "integer",
+            "title": "Registros Hoje"
+          },
+          "ja_entregou": {
+            "type": "boolean",
+            "title": "Ja Entregou"
+          }
+        },
+        "type": "object",
+        "required": [
+          "canal",
+          "fonte",
+          "ultima_entrega_em",
+          "registros_hoje",
+          "ja_entregou"
+        ],
+        "title": "CanalColetaResposta"
+      },
       "CandlesResposta": {
         "properties": {
           "ticker": {
@@ -570,48 +642,29 @@
         ],
         "title": "CarteiraResposta"
       },
-      "ColetaResposta": {
+      "CenarioResposta": {
         "properties": {
-          "canal": {
+          "nome": {
             "type": "string",
-            "title": "Canal",
-            "description": "O que é coletado: cotações, opções, notícias, resultados"
+            "title": "Nome"
           },
-          "fonte": {
+          "descricao": {
             "type": "string",
-            "title": "Fonte"
+            "title": "Descricao"
           },
-          "ultima_entrega_em": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ultima Entrega Em",
-            "description": "Última vez que esta fonte GRAVOU dado. Não é 'última tentativa': uma falha não deixa rastro no banco"
-          },
-          "registros_hoje": {
-            "type": "integer",
-            "title": "Registros Hoje"
-          },
-          "ja_entregou": {
-            "type": "boolean",
-            "title": "Ja Entregou"
+          "resultado_liquido": {
+            "type": "number",
+            "title": "Resultado Liquido"
           }
         },
         "type": "object",
         "required": [
-          "canal",
-          "fonte",
-          "ultima_entrega_em",
-          "registros_hoje",
-          "ja_entregou"
+          "nome",
+          "descricao",
+          "resultado_liquido"
         ],
-        "title": "ColetaResposta"
+        "title": "CenarioResposta",
+        "description": "Desfecho hipotético de uma operação AINDA ABERTA.\n\nNão é previsão de preço: é aritmética sobre o que aconteceria se a\nopção terminasse de cada jeito, com os números que já existem."
       },
       "CotacaoResposta": {
         "properties": {
@@ -690,6 +743,31 @@
           "motivos"
         ],
         "title": "DesfechoResposta"
+      },
+      "EncerramentoEntrada": {
+        "properties": {
+          "motivo": {
+            "type": "string",
+            "title": "Motivo",
+            "description": "expirada | recomprada | exercida | encerrada",
+            "default": "encerrada"
+          },
+          "preco_fechamento": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preco Fechamento",
+            "description": "Obrigatório em `recomprada`: é o que se pagou para sair. Sem ele o resultado sairia superestimado"
+          }
+        },
+        "type": "object",
+        "title": "EncerramentoEntrada",
+        "description": "Como a posição fechou — obrigatório porque o resultado depende disso.\n\n`fechada_em` sozinho diz QUANDO fechou e nunca COMO: expirada rende o\nprêmio inteiro, recomprada rende o prêmio menos a recompra, exercida\natravessa duas categorias fiscais."
       },
       "EventoResultadoResposta": {
         "properties": {
@@ -944,17 +1022,74 @@
       },
       "OperacaoResposta": {
         "properties": {
-          "coletas": {
-            "items": {
-              "$ref": "#/components/schemas/ColetaResposta"
-            },
-            "type": "array",
-            "title": "Coletas"
+          "posicao_id": {
+            "type": "integer",
+            "title": "Posicao Id"
           },
-          "orcamento": {
-            "$ref": "#/components/schemas/OrcamentoResposta"
+          "codigo": {
+            "type": "string",
+            "title": "Codigo"
           },
-          "ultima_avaliacao_em": {
+          "ticker_objeto": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ticker Objeto"
+          },
+          "quantidade": {
+            "type": "integer",
+            "title": "Quantidade",
+            "description": "Negativo = lançada. Em opções, não contratos"
+          },
+          "premio_unitario": {
+            "type": "number",
+            "title": "Premio Unitario"
+          },
+          "strike": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strike"
+          },
+          "vencimento": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vencimento"
+          },
+          "dias_para_vencimento": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dias Para Vencimento"
+          },
+          "aberta_em": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Aberta Em"
+          },
+          "fechada_em": {
             "anyOf": [
               {
                 "type": "string",
@@ -964,23 +1099,156 @@
                 "type": "null"
               }
             ],
-            "title": "Ultima Avaliacao Em"
+            "title": "Fechada Em"
           },
-          "rastreia_falhas": {
+          "motivo_fechamento": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo Fechamento"
+          },
+          "preco_fechamento": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preco Fechamento"
+          },
+          "preco_objeto": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preco Objeto"
+          },
+          "distancia_do_strike_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distancia Do Strike Pct",
+            "description": "Quanto o objeto está acima (+) ou abaixo (−) do strike. É a pergunta central da venda coberta"
+          },
+          "dentro_do_dinheiro": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dentro Do Dinheiro"
+          },
+          "resultado_bruto": {
+            "type": "number",
+            "title": "Resultado Bruto"
+          },
+          "custos": {
+            "type": "number",
+            "title": "Custos"
+          },
+          "imposto": {
+            "type": "number",
+            "title": "Imposto"
+          },
+          "resultado_liquido": {
+            "type": "number",
+            "title": "Resultado Liquido"
+          },
+          "pernas": {
+            "items": {
+              "$ref": "#/components/schemas/PernaResposta"
+            },
+            "type": "array",
+            "title": "Pernas"
+          },
+          "cenarios": {
+            "items": {
+              "$ref": "#/components/schemas/CenarioResposta"
+            },
+            "type": "array",
+            "title": "Cenarios"
+          },
+          "estimativa": {
             "type": "boolean",
-            "title": "Rastreia Falhas",
-            "description": "Sempre False: nada registra execução com erro. Fonte sem entrega recente pode estar quebrada OU apenas sem novidade — o banco não distingue os dois casos",
-            "default": false
+            "title": "Estimativa",
+            "description": "Sempre True: é estimativa por operação, não apuração fiscal — a real é mensal e consolida operações",
+            "default": true
+          },
+          "ressalvas": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Ressalvas"
           }
         },
         "type": "object",
         "required": [
-          "coletas",
-          "orcamento",
-          "ultima_avaliacao_em"
+          "posicao_id",
+          "codigo",
+          "ticker_objeto",
+          "quantidade",
+          "premio_unitario",
+          "strike",
+          "vencimento",
+          "dias_para_vencimento",
+          "aberta_em",
+          "fechada_em",
+          "motivo_fechamento",
+          "preco_fechamento",
+          "preco_objeto",
+          "distancia_do_strike_pct",
+          "dentro_do_dinheiro",
+          "resultado_bruto",
+          "custos",
+          "imposto",
+          "resultado_liquido",
+          "pernas",
+          "cenarios",
+          "ressalvas"
         ],
-        "title": "OperacaoResposta",
-        "description": "Saúde da coleta, derivada do dado que já existe.\n\nEste recurso NÃO é um log de execução: o projeto não grava tentativas,\nerros nem duração. Ele responde \"quando cada fonte entregou dado pela\núltima vez\", que é o que o banco realmente sabe. `rastreia_falhas`\ndeclara esse limite no próprio contrato para que a interface não\napresente silêncio como se fosse saúde."
+        "title": "OperacaoResposta"
+      },
+      "OperacoesResposta": {
+        "properties": {
+          "operacoes": {
+            "items": {
+              "$ref": "#/components/schemas/OperacaoResposta"
+            },
+            "type": "array",
+            "title": "Operacoes"
+          },
+          "tem_cotacao_de_opcao": {
+            "type": "boolean",
+            "title": "Tem Cotacao De Opcao",
+            "description": "False enquanto o ETL de opções estiver bloqueado: sem ele não há marcação a mercado da posição em opção"
+          }
+        },
+        "type": "object",
+        "required": [
+          "operacoes",
+          "tem_cotacao_de_opcao"
+        ],
+        "title": "OperacoesResposta"
       },
       "OrcamentoResposta": {
         "properties": {
@@ -1090,6 +1358,44 @@
         "title": "PendenteConsolidacaoResposta",
         "description": "Data que o usuário registrou e que NUNCA virou evento consultável.\n\nRegistrar não é consolidar: `earnings.manage add` grava o que o usuário\nleu no site de RI, e só `earnings.ingest` promove aquilo para\n`earnings_events`. Sem o segundo passo a data existe no banco e a\navaliação segue bloqueada — a armadilha mais cara deste fluxo, e por\nisso ela é exposta como estado próprio em vez de ficar invisível."
       },
+      "PernaResposta": {
+        "properties": {
+          "nome": {
+            "type": "string",
+            "title": "Nome"
+          },
+          "resultado_bruto": {
+            "type": "number",
+            "title": "Resultado Bruto"
+          },
+          "custos": {
+            "type": "number",
+            "title": "Custos"
+          },
+          "aliquota_pct": {
+            "type": "number",
+            "title": "Aliquota Pct"
+          },
+          "imposto": {
+            "type": "number",
+            "title": "Imposto"
+          },
+          "resultado_liquido": {
+            "type": "number",
+            "title": "Resultado Liquido"
+          }
+        },
+        "type": "object",
+        "required": [
+          "nome",
+          "resultado_bruto",
+          "custos",
+          "aliquota_pct",
+          "imposto",
+          "resultado_liquido"
+        ],
+        "title": "PernaResposta"
+      },
       "PosicaoAbertaResposta": {
         "properties": {
           "id": {
@@ -1168,12 +1474,47 @@
           "quantidade": {
             "type": "integer",
             "title": "Quantidade",
-            "description": "Negativo = posição LANÇADA (vendida). É assim que uma venda coberta é registrada"
+            "description": "Negativo = posição LANÇADA (vendida). É assim que uma venda coberta é registrada. Está em OPÇÕES (cada uma sobre 1 ação), não em contratos"
           },
           "preco_medio": {
             "type": "number",
             "title": "Preco Medio",
             "description": "Base de custo — nunca valor de mercado"
+          },
+          "ticker_objeto": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ticker Objeto",
+            "description": "A ação que a opção cobre. Informado, não inferido: derivar do código exigiria interpretar código B3"
+          },
+          "strike": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strike"
+          },
+          "vencimento": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vencimento"
           }
         },
         "type": "object",
@@ -1292,6 +1633,46 @@
           "politica_resultado_desconhecido"
         ],
         "title": "ResultadosResposta"
+      },
+      "SaudeColetaResposta": {
+        "properties": {
+          "coletas": {
+            "items": {
+              "$ref": "#/components/schemas/CanalColetaResposta"
+            },
+            "type": "array",
+            "title": "Coletas"
+          },
+          "orcamento": {
+            "$ref": "#/components/schemas/OrcamentoResposta"
+          },
+          "ultima_avaliacao_em": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ultima Avaliacao Em"
+          },
+          "rastreia_falhas": {
+            "type": "boolean",
+            "title": "Rastreia Falhas",
+            "description": "Sempre False: nada registra execução com erro. Fonte sem entrega recente pode estar quebrada OU apenas sem novidade — o banco não distingue os dois casos",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "coletas",
+          "orcamento",
+          "ultima_avaliacao_em"
+        ],
+        "title": "SaudeColetaResposta",
+        "description": "Saúde da coleta, derivada do dado que já existe.\n\nEste recurso NÃO é um log de execução: o projeto não grava tentativas,\nerros nem duração. Ele responde \"quando cada fonte entregou dado pela\núltima vez\", que é o que o banco realmente sabe. `rastreia_falhas`\ndeclara esse limite no próprio contrato para que a interface não\napresente silêncio como se fosse saúde."
       },
       "SugestaoResposta": {
         "properties": {

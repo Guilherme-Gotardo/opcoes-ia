@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
+from src.portfolio import manage
 from src.portfolio.manage import (
     PosicaoInvalida,
     add_posicao,
@@ -80,7 +81,9 @@ def test_add_posicao_acao_valida():
     assert fake_conn.committed
     query, params = cursor.queries[0]
     assert "INSERT INTO posicoes" in query
-    assert params == ("PETR4", "ACAO", 100, 32.50, "manual")
+    # Os três últimos são os campos de opção da migração 005 — nulos numa
+    # posição em ação, que é o que a validação exige.
+    assert params == ("PETR4", "ACAO", 100, 32.50, "manual", None, None, None)
 
 
 def test_add_posicao_acao_em_ativo_nao_cadastrado_e_recusada():
@@ -149,7 +152,9 @@ def test_close_posicao_existente():
     assert fake_conn.committed
     query, params = cursor.queries[0]
     assert "UPDATE posicoes" in query
-    assert params == (1,)
+    # `motivo_fechamento` é obrigatório desde a migração 005: `fechada_em`
+    # sozinho diz quando fechou e nunca como.
+    assert params == ("encerrada", None, 1)
 
 
 def test_close_posicao_inexistente_levanta_erro():
@@ -176,3 +181,29 @@ def test_list_posicoes_abertas():
     assert posicoes[0]["ticker"] == "PETR4"
     query, _ = cursor.queries[0]
     assert "fechada_em IS NULL" in query
+
+
+# --- campos de opção e desfecho (migração 005) ------------------------------
+
+def test_acao_nao_aceita_campos_de_opcao():
+    """Strike numa posição de ação é dado no lugar errado — recusar é mais
+    honesto do que gravar e ignorar depois."""
+    with pytest.raises(PosicaoInvalida, match="não aceita"):
+        manage.add_posicao("PETR4", "ACAO", 100, 32.5, strike=45.0)
+
+
+def test_strike_precisa_ser_positivo():
+    with pytest.raises(PosicaoInvalida, match="strike"):
+        manage.add_posicao("PETRI450", "OPCAO", -100, 1.15, strike=0)
+
+
+def test_recompra_sem_preco_e_recusada():
+    """Sem o preço pago para sair, o resultado da operação sairia
+    superestimado — e um número inflado é pior do que número nenhum."""
+    with pytest.raises(PosicaoInvalida, match="superestimado"):
+        manage.close_posicao(1, motivo="recomprada")
+
+
+def test_motivo_de_fechamento_fora_do_conjunto_e_recusado():
+    with pytest.raises(PosicaoInvalida, match="motivo de fechamento"):
+        manage.close_posicao(1, motivo="virou_po")

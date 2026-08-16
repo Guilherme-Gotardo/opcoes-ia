@@ -50,8 +50,10 @@ from src.config import get_settings
 from src.db.connection import get_connection
 from src.earnings.models import faixa_de_confianca
 from src.etl.budget import requests_gastos_hoje
+from src.fiscal.calculo import avaliar_operacao, carregar_tributos
 from src.market.valuation import (
     carregar_params,
+    cotacao_vigente,
     frescor_maximo_horas,
     visao_carteira,
 )
@@ -228,7 +230,7 @@ class ResultadosResposta(BaseModel):
     )
 
 
-class ColetaResposta(BaseModel):
+class CanalColetaResposta(BaseModel):
     canal: str = Field(description="O que é coletado: cotações, opções, notícias, resultados")
     fonte: str
     ultima_entrega_em: dt.datetime | None = Field(
@@ -252,7 +254,7 @@ class OrcamentoResposta(BaseModel):
     )
 
 
-class OperacaoResposta(BaseModel):
+class SaudeColetaResposta(BaseModel):
     """Saúde da coleta, derivada do dado que já existe.
 
     Este recurso NÃO é um log de execução: o projeto não grava tentativas,
@@ -262,7 +264,7 @@ class OperacaoResposta(BaseModel):
     apresente silêncio como se fosse saúde.
     """
 
-    coletas: list[ColetaResposta]
+    coletas: list[CanalColetaResposta]
     orcamento: OrcamentoResposta
     ultima_avaliacao_em: dt.datetime | None
     rastreia_falhas: bool = Field(
@@ -297,6 +299,73 @@ class CandlesResposta(BaseModel):
     velas: list[VelaResposta]
     intervalos_disponiveis: list[str] = Field(
         description="Intervalos que já têm vela gravada para este ticker"
+    )
+
+
+class PernaResposta(BaseModel):
+    nome: str
+    resultado_bruto: float
+    custos: float
+    aliquota_pct: float
+    imposto: float
+    resultado_liquido: float
+
+
+class CenarioResposta(BaseModel):
+    """Desfecho hipotético de uma operação AINDA ABERTA.
+
+    Não é previsão de preço: é aritmética sobre o que aconteceria se a
+    opção terminasse de cada jeito, com os números que já existem.
+    """
+
+    nome: str
+    descricao: str
+    resultado_liquido: float
+
+
+class OperacaoResposta(BaseModel):
+    posicao_id: int
+    codigo: str
+    ticker_objeto: str | None
+    quantidade: int = Field(description="Negativo = lançada. Em opções, não contratos")
+    premio_unitario: float
+    strike: float | None
+    vencimento: dt.date | None
+    dias_para_vencimento: int | None
+    aberta_em: dt.datetime
+    fechada_em: dt.datetime | None
+    motivo_fechamento: str | None
+    preco_fechamento: float | None
+
+    #: Cotação do ATIVO-OBJETO. A da opção não existe: o ETL de opções está
+    #: bloqueado no plano Free da Brapi, então não há marcação a mercado da
+    #: opção — e a tela não finge que há.
+    preco_objeto: float | None
+    distancia_do_strike_pct: float | None = Field(
+        description="Quanto o objeto está acima (+) ou abaixo (−) do strike. "
+                    "É a pergunta central da venda coberta"
+    )
+    dentro_do_dinheiro: bool | None
+
+    resultado_bruto: float
+    custos: float
+    imposto: float
+    resultado_liquido: float
+    pernas: list[PernaResposta]
+    cenarios: list[CenarioResposta]
+    estimativa: bool = Field(
+        default=True,
+        description="Sempre True: é estimativa por operação, não apuração "
+                    "fiscal — a real é mensal e consolida operações",
+    )
+    ressalvas: list[str]
+
+
+class OperacoesResposta(BaseModel):
+    operacoes: list[OperacaoResposta]
+    tem_cotacao_de_opcao: bool = Field(
+        description="False enquanto o ETL de opções estiver bloqueado: sem "
+                    "ele não há marcação a mercado da posição em opção"
     )
 
 
@@ -542,8 +611,8 @@ _CANAIS_COLETA = (
 )
 
 
-@app.get("/operacao", response_model=OperacaoResposta)
-def operacao() -> OperacaoResposta:
+@app.get("/saude-coleta", response_model=SaudeColetaResposta)
+def saude_coleta() -> SaudeColetaResposta:
     """Quando cada fonte entregou dado pela última vez, e quanto do
     orçamento diário de requests já foi gasto.
 
@@ -554,7 +623,7 @@ def operacao() -> OperacaoResposta:
     novidade, e o banco não sabe qual dos dois.
     """
     hoje = dt.datetime.now(dt.timezone.utc).date()
-    coletas: list[ColetaResposta] = []
+    coletas: list[CanalColetaResposta] = []
 
     with get_connection() as conn, conn.cursor() as cur:
         for canal, tabela in _CANAIS_COLETA:
@@ -571,7 +640,7 @@ def operacao() -> OperacaoResposta:
                 (hoje,),
             )
             for fonte, ultima, hoje_qtd in cur.fetchall():
-                coletas.append(ColetaResposta(
+                coletas.append(CanalColetaResposta(
                     canal=canal, fonte=fonte, ultima_entrega_em=ultima,
                     registros_hoje=hoje_qtd, ja_entregou=ultima is not None,
                 ))
@@ -589,7 +658,7 @@ def operacao() -> OperacaoResposta:
             (hoje,),
         )
         for provedor, ultima, hoje_qtd in cur.fetchall():
-            coletas.append(ColetaResposta(
+            coletas.append(CanalColetaResposta(
                 canal="resultados", fonte=provedor, ultima_entrega_em=ultima,
                 registros_hoje=hoje_qtd, ja_entregou=ultima is not None,
             ))
@@ -600,7 +669,7 @@ def operacao() -> OperacaoResposta:
         limite = get_settings().brapi_requests_dia_maximo
         gastos = requests_gastos_hoje(cur)
 
-    return OperacaoResposta(
+    return SaudeColetaResposta(
         coletas=coletas,
         orcamento=OrcamentoResposta(
             fonte="brapi",
@@ -666,6 +735,150 @@ def candles(
             )
             for quando, a, h, l, c, vol in linhas
         ],
+    )
+
+
+def _cenarios_da_operacao(
+    quantidade: int, premio: float, strike: float | None,
+    preco_medio_acao: float | None, tributos: dict,
+) -> list[CenarioResposta]:
+    """Os dois desfechos de uma call lançada em aberto.
+
+    Existe porque a pergunta "como está indo" não tem resposta em dinheiro
+    realizado enquanto a operação está aberta — e inventar uma marcação a
+    mercado sem cotação de opção seria estimar valor, proibido pela regra 1
+    do projeto. O que dá para responder honestamente é: quanto sobra em
+    cada final possível.
+    """
+    cenarios = []
+
+    expira = avaliar_operacao(
+        quantidade=quantidade, premio_unitario=premio,
+        motivo_fechamento="expirada", preco_fechamento=None,
+        strike=strike, preco_medio_acao=preco_medio_acao, params=tributos,
+    )
+    cenarios.append(CenarioResposta(
+        nome="expira sem exercício",
+        descricao="a opção vira pó e o prêmio fica inteiro",
+        resultado_liquido=expira.resultado_liquido,
+    ))
+
+    if strike is not None and preco_medio_acao is not None:
+        exercida = avaliar_operacao(
+            quantidade=quantidade, premio_unitario=premio,
+            motivo_fechamento="exercida", preco_fechamento=None,
+            strike=strike, preco_medio_acao=preco_medio_acao, params=tributos,
+        )
+        cenarios.append(CenarioResposta(
+            nome="exercida",
+            descricao="as ações são entregues ao strike; soma o prêmio ao "
+                      "resultado da venda",
+            resultado_liquido=exercida.resultado_liquido,
+        ))
+    return cenarios
+
+
+@app.get("/operacoes", response_model=OperacoesResposta)
+def operacoes() -> OperacoesResposta:
+    """Operações de opção — abertas e encerradas — com resultado estimado.
+
+    NÃO há marcação a mercado da opção: o ETL de opções está bloqueado no
+    plano Free do provedor e `opcoes` fica vazia. O que se usa é a cotação
+    do ATIVO-OBJETO, que responde a pergunta central da venda coberta ("a
+    ação passou do strike?") sem precisar do preço da opção. A resposta
+    declara esse limite em `tem_cotacao_de_opcao`.
+    """
+    params = carregar_params()
+    tributos = carregar_tributos()
+
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, ticker, ticker_objeto, quantidade, preco_medio, strike,
+                   vencimento, aberta_em, fechada_em, motivo_fechamento,
+                   preco_fechamento
+            FROM posicoes
+            WHERE tipo_ativo = 'OPCAO'
+            ORDER BY fechada_em NULLS FIRST, vencimento NULLS LAST, ticker
+            """
+        )
+        linhas = cur.fetchall()
+
+        # Preço médio da ação por objeto: é a base da perna de ação quando a
+        # call é exercida.
+        cur.execute(
+            """
+            SELECT ticker,
+                   SUM(quantidade * preco_medio) / NULLIF(SUM(quantidade), 0)
+            FROM posicoes
+            WHERE tipo_ativo = 'ACAO' AND fechada_em IS NULL
+            GROUP BY ticker
+            """
+        )
+        preco_medio_por_ticker = {t: float(p) for t, p in cur.fetchall() if p is not None}
+
+        cur.execute("SELECT COUNT(*) FROM opcoes")
+        tem_cotacao_de_opcao = cur.fetchone()[0] > 0
+
+        objetos = {l[2] for l in linhas if l[2]}
+        cotacao_por_objeto = {}
+        for objeto in objetos:
+            vigente = cotacao_vigente(cur, objeto, params)
+            cotacao_por_objeto[objeto] = vigente.preco if vigente.utilizavel else None
+
+    hoje = dt.date.today()
+    respostas = []
+    for (pid, codigo, objeto, qtd, premio, strike, venc, aberta, fechada,
+         motivo, preco_fech) in linhas:
+        premio = float(premio)
+        strike = float(strike) if strike is not None else None
+        preco_fech = float(preco_fech) if preco_fech is not None else None
+        preco_objeto = cotacao_por_objeto.get(objeto)
+        preco_medio_acao = preco_medio_por_ticker.get(objeto)
+
+        resultado = avaliar_operacao(
+            quantidade=qtd, premio_unitario=premio, motivo_fechamento=motivo,
+            preco_fechamento=preco_fech, strike=strike,
+            preco_medio_acao=preco_medio_acao, params=tributos,
+        )
+
+        distancia = None
+        dentro = None
+        if strike and preco_objeto is not None:
+            distancia = (preco_objeto - strike) / strike * 100
+            dentro = preco_objeto > strike
+
+        respostas.append(OperacaoResposta(
+            posicao_id=pid, codigo=codigo, ticker_objeto=objeto,
+            quantidade=qtd, premio_unitario=premio, strike=strike,
+            vencimento=venc,
+            dias_para_vencimento=(venc - hoje).days if venc else None,
+            aberta_em=aberta, fechada_em=fechada, motivo_fechamento=motivo,
+            preco_fechamento=preco_fech,
+            preco_objeto=preco_objeto,
+            distancia_do_strike_pct=distancia,
+            dentro_do_dinheiro=dentro,
+            resultado_bruto=resultado.resultado_bruto,
+            custos=resultado.custos,
+            imposto=resultado.imposto,
+            resultado_liquido=resultado.resultado_liquido,
+            pernas=[
+                PernaResposta(
+                    nome=p.nome, resultado_bruto=p.resultado_bruto,
+                    custos=p.custos, aliquota_pct=p.aliquota_pct,
+                    imposto=p.imposto, resultado_liquido=p.resultado_liquido,
+                )
+                for p in resultado.pernas
+            ],
+            cenarios=(
+                _cenarios_da_operacao(qtd, premio, strike, preco_medio_acao, tributos)
+                if motivo is None else []
+            ),
+            ressalvas=resultado.ressalvas,
+        ))
+
+    return OperacoesResposta(
+        operacoes=respostas, tem_cotacao_de_opcao=tem_cotacao_de_opcao
     )
 
 

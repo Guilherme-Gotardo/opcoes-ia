@@ -84,7 +84,10 @@ def test_quantidade_negativa_registra_posicao_lancada():
         })
 
     assert r.status_code == 201
-    add.assert_called_once_with("PETRI450", "OPCAO", -100, 1.15)
+    add.assert_called_once_with(
+        "PETRI450", "OPCAO", -100, 1.15,
+        ticker_objeto=None, strike=None, vencimento=None,
+    )
 
 
 def test_posicao_em_ativo_nao_cadastrado_devolve_o_comando_que_resolve():
@@ -123,16 +126,26 @@ def test_listar_posicoes_abertas():
 
 
 def test_encerrar_posicao_preserva_a_linha():
+    """O corpo com o motivo é obrigatório — serve de confirmação, já que
+    encerrar é irreversível pela interface (não existe reabrir)."""
     with patch.object(escrita, "close_posicao") as fechar:
-        r = cliente.post("/posicoes/7/encerrar")
+        r = cliente.post("/posicoes/7/encerrar", json={"motivo": "expirada"})
     assert r.status_code == 204
-    fechar.assert_called_once_with(7)
+    fechar.assert_called_once_with(7, "expirada", None)
+
+
+def test_encerrar_como_recompra_exige_preco():
+    """Sem o preço pago para sair, o resultado sairia superestimado."""
+    with patch.object(escrita, "close_posicao",
+                      side_effect=PosicaoInvalida("recompra exige o preço … superestimado")):
+        r = cliente.post("/posicoes/7/encerrar", json={"motivo": "recomprada"})
+    assert r.status_code == 422
 
 
 def test_encerrar_posicao_inexistente_e_404():
     with patch.object(escrita, "close_posicao",
                       side_effect=PosicaoInvalida("Nenhuma posição aberta com id=99")):
-        r = cliente.post("/posicoes/99/encerrar")
+        r = cliente.post("/posicoes/99/encerrar", json={"motivo": "encerrada"})
     assert r.status_code == 404
 
 

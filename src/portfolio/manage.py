@@ -9,6 +9,7 @@ Uso:
     python -m src.portfolio.manage list
 """
 import argparse
+import datetime as dt
 import logging
 
 from src.assets.manage import ativo_existe
@@ -30,6 +31,9 @@ def add_posicao(
     quantidade: int,
     preco_medio: float,
     origem: str = "manual",
+    ticker_objeto: str | None = None,
+    strike: float | None = None,
+    vencimento: "dt.date | str | None" = None,
 ) -> int:
     """Registra uma nova posição em `posicoes`. Retorna o id gerado.
 
@@ -38,6 +42,13 @@ def add_posicao(
     - tipo_ativo precisa ser 'ACAO' ou 'OPCAO'
     - quantidade não pode ser zero (não é uma posição)
     - preco_medio precisa ser maior que zero
+    - `ticker_objeto`, `strike` e `vencimento` só fazem sentido em OPCAO
+
+    Os três campos de opção são OPCIONAIS por compatibilidade com o que já
+    está gravado, mas sem eles a operação não pode ser acompanhada: não há
+    como comparar strike com cotação nem contar dias para o vencimento.
+    Quem registrar opção sem eles recebe a posição em carteira e fica sem o
+    módulo de operações — o custo é declarado, não escondido.
     """
     tipo_ativo = tipo_ativo.upper()
     if tipo_ativo not in TIPOS_ATIVO_VALIDOS:
@@ -52,6 +63,26 @@ def add_posicao(
     if preco_medio <= 0:
         raise PosicaoInvalida(
             f"preco_medio precisa ser maior que zero (recebido: {preco_medio})."
+        )
+
+    campos_de_opcao = {
+        "ticker_objeto": ticker_objeto, "strike": strike, "vencimento": vencimento,
+    }
+    informados = [k for k, v in campos_de_opcao.items() if v is not None]
+    if tipo_ativo == "ACAO" and informados:
+        raise PosicaoInvalida(
+            f"posição em ACAO não aceita {', '.join(sorted(informados))} — "
+            "esses campos descrevem uma opção."
+        )
+    if strike is not None and strike <= 0:
+        raise PosicaoInvalida(
+            f"strike precisa ser maior que zero (recebido: {strike})."
+        )
+    if ticker_objeto is not None and not ativo_existe(ticker_objeto):
+        raise PosicaoInvalida(
+            f"ativo-objeto não cadastrado: {ticker_objeto.upper()}. Cadastre "
+            "antes de registrar a opção:\n"
+            f'  python -m src.assets.manage add {ticker_objeto.upper()} "<nome>" acao'
         )
 
     # O ativo precisa existir: `cotacoes.ticker` tem FK para `ativos`, então
@@ -75,11 +106,13 @@ def add_posicao(
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO posicoes (ticker, tipo_ativo, quantidade, preco_medio, origem)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO posicoes (ticker, tipo_ativo, quantidade, preco_medio,
+                                  origem, ticker_objeto, strike, vencimento)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (ticker.upper(), tipo_ativo, quantidade, preco_medio, origem),
+            (ticker.upper(), tipo_ativo, quantidade, preco_medio, origem,
+             ticker_objeto.upper() if ticker_objeto else None, strike, vencimento),
         )
         posicao_id = cur.fetchone()[0]
         conn.commit()
@@ -90,16 +123,53 @@ def add_posicao(
     return posicao_id
 
 
-def close_posicao(posicao_id: int) -> None:
-    """Encerra uma posição em aberto (marca `fechada_em`), preservando o
-    histórico — a linha nunca é removida."""
+#: Espelha o CHECK da migração 005. Conjunto fechado porque texto livre
+#: viraria "expirou"/"expirada"/"venceu" na mesma base, e a apuração não
+#: teria como somar.
+MOTIVOS_FECHAMENTO = ("expirada", "recomprada", "exercida", "encerrada")
+
+
+def close_posicao(
+    posicao_id: int,
+    motivo: str = "encerrada",
+    preco_fechamento: float | None = None,
+) -> None:
+    """Encerra uma posição em aberto, preservando o histórico — a linha
+    nunca é removida.
+
+    `motivo` é obrigatório no banco desde a migração 005: `fechada_em`
+    sozinho diz quando fechou e nunca como, e sem o como não há resultado a
+    apurar. O padrão `encerrada` cobre posição em ação, que não tem
+    desfecho de opção.
+
+    `recomprada` exige preço: é o que se pagou para sair, e sem ele o
+    resultado sairia superestimado.
+    """
+    if motivo not in MOTIVOS_FECHAMENTO:
+        raise PosicaoInvalida(
+            f"motivo de fechamento inválido: {motivo!r}. "
+            f"Use um de: {', '.join(MOTIVOS_FECHAMENTO)}."
+        )
+    if motivo == "recomprada" and preco_fechamento is None:
+        raise PosicaoInvalida(
+            "recompra exige o preço pago para sair — sem ele o resultado da "
+            "operação ficaria superestimado."
+        )
+    if preco_fechamento is not None and preco_fechamento < 0:
+        raise PosicaoInvalida(
+            f"preco_fechamento não pode ser negativo (recebido: {preco_fechamento})."
+        )
+
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            UPDATE posicoes SET fechada_em = now()
+            UPDATE posicoes
+               SET fechada_em = now(),
+                   motivo_fechamento = %s,
+                   preco_fechamento = %s
             WHERE id = %s AND fechada_em IS NULL
             """,
-            (posicao_id,),
+            (motivo, preco_fechamento, posicao_id),
         )
         atualizado = cur.rowcount
         conn.commit()

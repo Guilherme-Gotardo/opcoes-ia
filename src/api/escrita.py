@@ -79,9 +79,21 @@ class PosicaoEntrada(BaseModel):
     tipo_ativo: str = Field(description="ACAO | OPCAO")
     quantidade: int = Field(
         description="Negativo = posição LANÇADA (vendida). É assim que uma "
-                    "venda coberta é registrada"
+                    "venda coberta é registrada. Está em OPÇÕES (cada uma "
+                    "sobre 1 ação), não em contratos"
     )
     preco_medio: float = Field(description="Base de custo — nunca valor de mercado")
+
+    # Só em OPCAO. Sem eles a posição entra na carteira mas fica fora do
+    # acompanhamento: não há como comparar strike com cotação nem contar
+    # dias para o vencimento.
+    ticker_objeto: str | None = Field(
+        default=None,
+        description="A ação que a opção cobre. Informado, não inferido: "
+                    "derivar do código exigiria interpretar código B3",
+    )
+    strike: float | None = None
+    vencimento: dt.date | None = None
 
 
 class PosicaoAbertaResposta(BaseModel):
@@ -92,6 +104,25 @@ class PosicaoAbertaResposta(BaseModel):
     preco_medio: float
     aberta_em: dt.datetime
     origem: str
+
+
+class EncerramentoEntrada(BaseModel):
+    """Como a posição fechou — obrigatório porque o resultado depende disso.
+
+    `fechada_em` sozinho diz QUANDO fechou e nunca COMO: expirada rende o
+    prêmio inteiro, recomprada rende o prêmio menos a recompra, exercida
+    atravessa duas categorias fiscais.
+    """
+
+    motivo: str = Field(
+        default="encerrada",
+        description="expirada | recomprada | exercida | encerrada",
+    )
+    preco_fechamento: float | None = Field(
+        default=None,
+        description="Obrigatório em `recomprada`: é o que se pagou para sair. "
+                    "Sem ele o resultado sairia superestimado",
+    )
 
 
 class PosicaoCriada(BaseModel):
@@ -163,6 +194,9 @@ def registrar_posicao(entrada: PosicaoEntrada) -> PosicaoCriada:
             entrada.tipo_ativo,
             entrada.quantidade,
             entrada.preco_medio,
+            ticker_objeto=entrada.ticker_objeto,
+            strike=entrada.strike,
+            vencimento=entrada.vencimento,
         )
     except PosicaoInvalida as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
@@ -170,10 +204,17 @@ def registrar_posicao(entrada: PosicaoEntrada) -> PosicaoCriada:
 
 
 @router.post("/posicoes/{posicao_id}/encerrar", status_code=204)
-def encerrar_posicao(posicao_id: int) -> None:
-    """Marca `fechada_em`. A linha NUNCA é removida: o histórico é o que
-    permite explicar uma decisão passada meses depois."""
+def encerrar_posicao(posicao_id: int, entrada: EncerramentoEntrada) -> None:
+    """Marca `fechada_em` com o desfecho. A linha NUNCA é removida: o
+    histórico é o que permite explicar uma decisão passada meses depois.
+
+    Exige corpo com o motivo — o que também serve de confirmação: encerrar
+    é irreversível pela interface (não existe reabrir), e um POST vazio
+    tornava perda de dado a um clique de distância.
+    """
     try:
-        close_posicao(posicao_id)
+        close_posicao(posicao_id, entrada.motivo, entrada.preco_fechamento)
     except PosicaoInvalida as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        # Motivo inválido é erro de entrada (422); posição inexistente é 404.
+        codigo = 422 if "motivo" in str(e) or "superestimado" in str(e) else 404
+        raise HTTPException(status_code=codigo, detail=str(e)) from e
