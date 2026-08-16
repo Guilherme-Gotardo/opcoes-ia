@@ -18,6 +18,14 @@ A ordem de aplicação é a ordem numérica dos arquivos.
 1. **Toda migração é aditiva e idempotente.** Use `CREATE TABLE IF NOT
    EXISTS`, `ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`.
    Rodar duas vezes precisa ser inofensivo.
+
+   Isto deixou de ser só convenção: `src/db/bootstrap.py` aplica
+   `schema.sql` e **todas** as migrações a cada execução, sem verificar o
+   que já foi aplicado. É a idempotência que torna isso seguro, e o comando
+   não tem como conferi-la — é disciplina, não garantia. O dia em que uma
+   migração não puder ser idempotente é o gatilho para criar controle de
+   versão aplicada (`schema_migrations`), numa change própria com o motivo
+   registrado.
 2. **Nunca destrua dado numa migração.** `DROP`/`ALTER ... TYPE` que
    perdem informação exigem uma migração de cópia antes, e uma decisão
    registrada na change correspondente.
@@ -29,10 +37,17 @@ A ordem de aplicação é a ordem numérica dos arquivos.
 ## Aplicar
 
 ```bash
-docker compose up -d db
-psql "$DATABASE_URL" -f src/db/migrations/001_earnings_events.sql
+# mostra o alvo e os arquivos, sem escrever nada
+python -m src.db.bootstrap --dry-run
+
+# aplica schema.sql + migrações, em ordem, no banco de DATABASE_URL
+python -m src.db.bootstrap
 ```
 
-Ainda não há runner automático: a carteira é pessoal e as migrações são
-poucas. Se isso mudar, o runner entra aqui e passa a ler a ordem dos
-nomes.
+O comando imprime host e base **antes** de aplicar qualquer arquivo (sem a
+senha): o modo de falha previsível é rodar no banco errado, e ver o destino
+a tempo é o que permite abortar. Falha em qualquer arquivo interrompe com
+código não zero, nomeando o arquivo — nunca sucesso parcial.
+
+Serve tanto para o Postgres gerenciado quanto para recriar o banco local
+descartável (`docker compose up -d db`). Ver `docs/RUNBOOK-POSTGRES.md`.

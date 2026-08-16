@@ -47,10 +47,17 @@ python -m src.earnings.manage remove PETR4 2026Q3
 python -m src.earnings.ingest
 python -m src.earnings.ingest --fontes manual,cvm
 
-# rodar testes
-pytest
+# preparar um banco (schema + migrações, idempotente)
+python -m src.db.bootstrap --dry-run   # mostra o alvo, sem escrever
+python -m src.db.bootstrap
 
-# subir banco local
+# rodar testes — APONTE PARA O BANCO DESCARTÁVEL, não para o Neon.
+# Os testes de integração escrevem e apagam linhas no banco de DATABASE_URL;
+# eles se protegem (tickers com prefixo ZZ, limpeza no fixture), mas não há
+# razão para fazer isso na base que guarda a carteira real.
+DATABASE_URL=postgresql://opcoes_ia:opcoes_ia@localhost:5433/opcoes_ia pytest
+
+# subir banco local descartável
 docker compose up -d db
 ```
 
@@ -117,6 +124,22 @@ docker compose up -d db
       avaliação de estratégia e relatório diário — ver tarefa 6.1 da change
       `build-portfolio-mvp-flow` para detalhes e o bug de fuso horário
       (UTC vs. local) corrigido em `report/daily.py`
+- [x] **Postgres gerenciado no Neon é a FONTE DA VERDADE** da carteira
+      (região `sa-east-1`, free tier, `sslmode=require` na URL). É o que o
+      GitHub Actions escreve e o que você opera. O Postgres do
+      `docker-compose` virou **banco descartável** de teste e
+      experimentação — pode ser derrubado e recriado sem perda, e não
+      guarda carteira real. A instância subiu vazia por decisão ("começar
+      do zero"): as posições precisam ser cadastradas por
+      `python -m src.portfolio.manage`. Schema aplicado por
+      `python -m src.db.bootstrap`, que é idempotente e imprime o alvo
+      antes de escrever. Runbook em `docs/RUNBOOK-POSTGRES.md`
+- [ ] **Os testes de integração escrevem no banco de `DATABASE_URL`.** Com
+      o `.env` apontando para o Neon, rodar `pytest` grava e apaga linhas
+      na base real a cada execução. Eles se protegem (tickers `ZZ`, limpeza
+      no fixture), mas a convenção é rodar a suíte contra o banco
+      descartável — ver "Comandos úteis". É convenção documentada, não
+      trava no código
 - [ ] `fetch_options.py` ainda não trocado de OpLab para os endpoints reais
       de opções da Brapi — bloqueado no plano Free do usuário: `403
       FEATURE_NOT_AVAILABLE` em **todos** os endpoints de opções

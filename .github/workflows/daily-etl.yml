@@ -52,5 +52,11 @@ jobs:
 
 # Pré-requisito: cadastrar DATABASE_URL, OPLAB_TOKEN e BRAPI_TOKEN em
 # Settings > Secrets and variables > Actions no repositório do GitHub.
-# O banco precisa estar acessível pela internet (ex: um Postgres gerenciado
-# como Supabase/Neon/RDS) — não um Postgres só local via docker-compose.
+#
+# DATABASE_URL aponta para o Postgres gerenciado no Neon, que é a fonte da
+# verdade da carteira — NÃO para o Postgres do docker-compose, que o Actions
+# não alcança e que passou a ser banco descartável de teste.
+#
+# Para preparar uma instância nova (ou recriar a atual):
+#   python -m src.db.bootstrap
+# Ver docs/RUNBOOK-POSTGRES.md.
