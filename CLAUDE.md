@@ -33,6 +33,11 @@ python -m src.etl.fetch_quotes
 python -m src.etl.fetch_options
 python -m src.etl.fetch_news
 
+# velas OHLC para o gráfico (tabela `candles`, separada de `cotacoes`).
+# O intervalo é coluna: 1h e 1d convivem, e a interface desenha o que houver.
+python -m src.etl.fetch_candles --intervalo 1h    # janela padrão: 5d
+python -m src.etl.fetch_candles --intervalo 1d    # janela padrão: 3mo
+
 # cadastro de ativos — PRÉ-REQUISITO de tudo: `cotacoes`, `opcoes` e
 # `noticias` têm FK para `ativos`. Sem cadastrar, o ETL recusa o ticker e
 # registrar posição falha. O nome nunca é derivado do ticker.
@@ -205,6 +210,70 @@ docker compose up -d db
       (`python -m src.api --schema` → `npm run gerar-tipos`), nunca escrito
       à mão. A interface mostra o desfecho da ÚLTIMA execução, não do
       instante — a data da execução acompanha a resposta
+- [x] **Superfície de leitura ampliada para 7 endpoints** (2026-08-16):
+      `/resultados`, `/operacao` e `/parametros` somaram-se aos quatro
+      originais, todos GET e sem escrita. `/resultados` expõe
+      `earnings_events` com as fontes que sustentam cada data E, separado,
+      o que está em `earnings_manual_entries` sem evento correspondente —
+      "registrar não é consolidar" virou estado consultável em vez de
+      armadilha silenciosa, com o comando do `ingest` junto. `/parametros`
+      publica `cotacao_frescor_maximo_horas` e
+      `politica_resultado_desconhecido` porque a interface estava
+      DUPLICANDO os dois: mudá-los em `params.yaml` não mudava a tela, que
+      passava a mentir sem avisar. `/operacao` deriva saúde de coleta dos
+      carimbos que já existem (`coletado_em` por fonte, `retrieved_at` por
+      provider de earnings, `MAX(executado_em)` do desfecho) e reusa
+      `etl/budget.py` para o orçamento. **Não é log de execução**: nada no
+      projeto grava tentativa, erro ou duração, e a resposta declara isso
+      em `rastreia_falhas: false` para a interface não vender silêncio como
+      saúde. Uma timeline por agente exige instrumentar os ETLs primeiro —
+      é change própria, não endpoint. Achado do caminho: o guardrail
+      `_sem_escrita` de `tests/test_api_read.py` casava substring e
+      reprovava um SELECT legítimo por causa da coluna `updated_at`
+      (contém "UPDATE"); passou a casar palavra inteira
+- [x] **Revisão do `strategy/covered.py`** (2026-08-16, change
+      `harden-covered-evaluation-inputs`): cinco achados, três deles bugs
+      reais. `strike` não era campo obrigatório e era usado sem proteção —
+      `opcao["strike"] * 100` no ramo covered put estourava `TypeError`
+      com strike nulo (que o ETL grava quando o provedor não devolve), e no
+      covered call o orquestrador fazia `strike or 0.0`, transformando dado
+      ausente em exposição ZERO e **aprovando** o critério que deveria
+      barrar. A janela de frescor valia só para a cotação da ação: delta e
+      IV rank de dias atrás entravam como se fossem de agora (`DISTINCT ON`
+      traz a linha mais recente, o que não é o mesmo que recente) — agora há
+      `opcao_frescor_maximo_horas`, que herda a da cotação quando omitida.
+      Os outros dois eram falta de VISIBILIDADE, corrigidos sem mexer na
+      postura de risco: `premio_minimo_pct` não desconta prazo e favorece
+      vencimentos longos (o equivalente mensal passou a aparecer no detalhe,
+      e há um critério opcional `premio_minimo_pct_ao_mes` desligado por
+      padrão); e patrimônio parcial subestima o denominador da exposição de
+      TODAS as posições, não só a do ticker sem cotação — a ressalva agora
+      viaja no detalhe do critério, não só num `log.warning` que ninguém que
+      lê o desfecho encontraria
+- [x] **A API ganhou escrita de carteira** (2026-08-16, `src/api/escrita.py`):
+      `POST /ativos`, `POST /posicoes` e `POST /posicoes/{id}/encerrar`,
+      reusando `add_ativo`/`add_posicao`/`close_posicao` — nenhuma validação
+      foi reescrita, para não criar uma segunda verdade sobre o que é
+      posição válida. O invariante "a API não escreve" foi **revisado**, não
+      abandonado: registrar posição é escrituração do que já está na
+      corretora, não ordem, e substituir as CLIs de entrada por telas é o
+      propósito declarado do `opcoes-ia-web`. Fica em módulo separado para
+      o guardrail `_sem_escrita` continuar provando que a LEITURA não
+      escreve. CORS passou a liberar POST; segue sem DELETE, porque
+      encerrar posição é UPDATE em `fechada_em`
+- [x] **Candles OHLC** (migração 004, `src/etl/fetch_candles.py`,
+      `GET /candles`): tabela nova em vez de colunas em `cotacoes`, porque
+      são coisas diferentes — cotação é preço num instante (o que a
+      valorização consome), vela é resumo de um período. `intervalo` é
+      COLUNA, então 1d, 1h e um futuro 15m convivem sem migração nova, e a
+      interface desenha o que houver. CHECK de coerência OHLC no banco
+      (máxima é teto, mínima é piso): um mapeamento trocado no provedor —
+      que já aconteceu aqui com `fetch_quotes` em 2026-08-14 — passaria
+      despercebido e só apareceria como vela invertida meses depois.
+      Confirmado contra a API real: `range=5d&interval=1h` devolve 28 velas,
+      `range=1mo&interval=1d` devolve 21. Uma execução DIÁRIA basta para a
+      série de 1h (a janela de 5d vem numa requisição só), e o workflow
+      ganhou os dois passos
 - [x] **Motivo de cada não-sugestão é persistido** (`desfecho_avaliacao`,
       migração 003). Antes, só as sugestões elegíveis iam para `sugestoes`;
       bloqueio por data de resultado, reprovação em critério, dado
