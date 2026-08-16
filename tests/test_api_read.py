@@ -3,6 +3,7 @@
 O dublê de cursor registra toda query executada — é o que permite provar
 que nenhum endpoint escreve no banco."""
 import datetime as dt
+import re
 from contextlib import contextmanager
 from unittest.mock import patch
 
@@ -72,11 +73,18 @@ def _cliente(dispatcher, desfecho=None):
     return TestClient(app), cursor, conn, patches
 
 
+#: Comandos de escrita, casados como PALAVRA inteira. Substring aqui dá
+#: falso positivo real: `earnings_events.updated_at` contém "UPDATE" e é
+#: nome de coluna num SELECT — a versão anterior deste guardrail reprovava
+#: uma query de leitura legítima por causa disso.
+_ESCRITA = re.compile(r"\b(INSERT|UPDATE|DELETE|TRUNCATE|CREATE|DROP|ALTER)\b")
+
+
 def _sem_escrita(cursor, conn):
     """A prova do requisito 'A API não dispara execução'."""
-    proibidos = ("INSERT", "UPDATE", "DELETE", "TRUNCATE", "CREATE", "DROP")
     for q in cursor.queries:
-        assert not any(p in q.upper() for p in proibidos), f"escrita detectada: {q}"
+        achado = _ESCRITA.search(q.upper())
+        assert achado is None, f"escrita detectada ({achado and achado.group()}): {q}"
     assert conn.commits == 0, "endpoint de leitura não comita"
 
 
@@ -237,9 +245,13 @@ def test_desfecho_sem_execucao_registrada_e_explicito():
 
 # --- Contrato ---------------------------------------------------------------
 
-def test_openapi_cobre_os_quatro_endpoints():
+def test_openapi_cobre_a_superficie_de_leitura():
     schema = app.openapi()
-    assert set(schema["paths"]) >= {"/carteira", "/cotacoes", "/sugestoes", "/desfecho"}
+    assert set(schema["paths"]) >= {
+        "/carteira", "/cotacoes", "/sugestoes", "/desfecho",
+        "/resultados", "/operacao", "/parametros",
+    }
+    assert set(schema["paths"]["/resultados"]) == {"get"}, "leitura, nunca escrita"
     # Campos com nome e tipo úteis para o gerador de TypeScript.
     carteira = schema["components"]["schemas"]["CarteiraResposta"]["properties"]
     assert "patrimonio_parcial" in carteira
@@ -275,3 +287,279 @@ def test_numeros_da_api_coincidem_com_os_do_relatorio():
     assert [p["valor"] for p in corpo["posicoes"]] == [
         p["valor"] for p in resumo["posicoes"]
     ]
+
+
+# --- /resultados ------------------------------------------------------------
+
+def _evento(ticker, periodo, estimada, confirmada, status, confianca,
+            hora_conf=None, sessao="AFTER_CLOSE"):
+    return (f"{ticker}:{periodo}", ticker, f"{ticker} SA", periodo,
+            estimada, confirmada, None, hora_conf, sessao, status,
+            confianca, [], AGORA)
+
+
+def _dispatch_resultados(eventos=(), fontes=(), pendentes=()):
+    def dispatch(query, params):
+        # A ordem importa: a query de pendentes cita `earnings_events` no
+        # LEFT JOIN, então ela precisa ser reconhecida antes.
+        if "earnings_manual_entries" in query:
+            return list(pendentes)
+        if "earnings_event_sources" in query:
+            return list(fontes)
+        if "FROM earnings_events" in query:
+            return list(eventos)
+        raise AssertionError(f"query não esperada: {query}")
+    return dispatch
+
+
+def test_resultados_confirmada_vence_e_estimada_e_preservada():
+    """A invariante do domínio virando contrato: a data efetiva é a
+    confirmada, e a estimativa divergente CONTINUA na resposta em vez de
+    ser apagada."""
+    cliente, cursor, conn, patches = _cliente(_dispatch_resultados(
+        eventos=[_evento("VALE3", "2026Q3", dt.date(2026, 10, 20),
+                         dt.date(2026, 10, 22), "CONFIRMED", 95,
+                         hora_conf=dt.time(18, 0))],
+    ))
+    with patches[0], patches[1]:
+        corpo = cliente.get("/resultados").json()
+
+    evento = corpo["eventos"][0]
+    assert evento["data_efetiva"] == "2026-10-22", "a confirmada é a que vale"
+    assert evento["data_estimada"] == "2026-10-20", "discordância preservada"
+    assert evento["confirmado"] is True
+    assert evento["faixa_confianca"] == "CONFIRMED"
+    assert evento["hora_efetiva"] == "18:00:00"
+    _sem_escrita(cursor, conn)
+
+
+def test_resultados_sem_confirmacao_usa_estimada_e_nao_finge_confirmacao():
+    cliente, cursor, conn, patches = _cliente(_dispatch_resultados(
+        eventos=[_evento("PETR4", "2026Q3", dt.date(2026, 11, 6), None,
+                         "ESTIMATED", 70)],
+    ))
+    with patches[0], patches[1]:
+        evento = cliente.get("/resultados").json()["eventos"][0]
+
+    assert evento["data_efetiva"] == "2026-11-06"
+    assert evento["data_confirmada"] is None
+    assert evento["confirmado"] is False
+    assert evento["faixa_confianca"] == "ESTIMATED_HIGH"
+    _sem_escrita(cursor, conn)
+
+
+def test_resultados_agrupam_fontes_por_evento():
+    cliente, cursor, conn, patches = _cliente(_dispatch_resultados(
+        eventos=[_evento("PETR4", "2026Q3", dt.date(2026, 11, 6), None,
+                         "ESTIMATED", 70)],
+        fontes=[
+            ("PETR4:2026Q3", "yahoo", dt.date(2026, 11, 6), "ESTIMATED", 60,
+             AGORA, "https://finance.yahoo.com"),
+            ("PETR4:2026Q3", "cvm", dt.date(2026, 11, 5), "RELEASED", 90,
+             AGORA, None),
+            ("OUTRO:2026Q3", "manual", dt.date(2026, 12, 1), "CONFIRMED", 100,
+             AGORA, None),
+        ],
+    ))
+    with patches[0], patches[1]:
+        evento = cliente.get("/resultados").json()["eventos"][0]
+
+    provedores = [f["provedor"] for f in evento["fontes"]]
+    assert provedores == ["yahoo", "cvm"], "só as fontes deste evento"
+    assert evento["fontes"][0]["url"] == "https://finance.yahoo.com"
+    _sem_escrita(cursor, conn)
+
+
+def test_resultados_expoem_registrado_mas_nao_consolidado():
+    """A armadilha do fluxo vira estado explícito: `manage add` gravou, o
+    `ingest` não promoveu, e a avaliação segue bloqueada."""
+    cliente, cursor, conn, patches = _cliente(_dispatch_resultados(
+        pendentes=[("ITUB4", "2026Q3", dt.date(2026, 11, 10), "UNKNOWN",
+                    "https://ri.itau.com.br", AGORA)],
+    ))
+    with patches[0], patches[1]:
+        corpo = cliente.get("/resultados").json()
+
+    assert corpo["eventos"] == []
+    pendente = corpo["pendentes_consolidacao"][0]
+    assert pendente["ticker"] == "ITUB4"
+    assert pendente["comando_para_consolidar"] == (
+        "python -m src.earnings.ingest --tickers ITUB4"
+    )
+    _sem_escrita(cursor, conn)
+
+
+def test_resultados_declaram_a_politica_vigente():
+    cliente, cursor, conn, patches = _cliente(_dispatch_resultados())
+    with patches[0], patches[1]:
+        corpo = cliente.get("/resultados").json()
+    assert corpo["politica_resultado_desconhecido"] == "bloquear"
+    _sem_escrita(cursor, conn)
+
+
+# --- /operacao --------------------------------------------------------------
+
+def _dispatch_operacao(cotacoes=(), opcoes=(), noticias=(), earnings=(),
+                       avaliacao=None, gastos=0):
+    def dispatch(query, params):
+        # A query do orçamento também cita `cotacoes`; reconhecer antes.
+        if "COUNT(*) FROM cotacoes WHERE fonte" in query:
+            return (gastos,)
+        if "FROM desfecho_avaliacao" in query:
+            return (avaliacao,)
+        if "FROM earnings_event_sources" in query:
+            return list(earnings)
+        if "FROM cotacoes" in query:
+            return list(cotacoes)
+        if "FROM opcoes" in query:
+            return list(opcoes)
+        if "FROM noticias" in query:
+            return list(noticias)
+        raise AssertionError(f"query não esperada: {query}")
+    return dispatch
+
+
+@contextmanager
+def _orcamento_de(limite):
+    from types import SimpleNamespace
+    with patch.object(api_app, "get_settings",
+                      return_value=SimpleNamespace(brapi_requests_dia_maximo=limite)):
+        yield
+
+
+def test_operacao_reporta_ultima_entrega_por_canal_e_fonte():
+    cliente, cursor, conn, patches = _cliente(_dispatch_operacao(
+        cotacoes=[("brapi", AGORA, 2)],
+        earnings=[("manual", AGORA, 1), ("cvm", None, 0)],
+        avaliacao=AGORA,
+        gastos=12,
+    ))
+    with patches[0], patches[1], _orcamento_de(600):
+        corpo = cliente.get("/operacao").json()
+
+    canais = {(c["canal"], c["fonte"]): c for c in corpo["coletas"]}
+    assert canais[("cotações", "brapi")]["registros_hoje"] == 2
+    assert canais[("cotações", "brapi")]["ja_entregou"] is True
+    assert canais[("resultados", "cvm")]["ja_entregou"] is False
+    assert corpo["ultima_avaliacao_em"] == "2026-08-16T12:00:00Z"
+    _sem_escrita(cursor, conn)
+
+
+def test_operacao_orcamento_usa_o_limite_configurado():
+    cliente, cursor, conn, patches = _cliente(_dispatch_operacao(gastos=45))
+    with patches[0], patches[1], _orcamento_de(600):
+        orcamento = cliente.get("/operacao").json()["orcamento"]
+
+    assert orcamento["limite_diario"] == 600
+    assert orcamento["gastos_hoje"] == 45
+    assert orcamento["restante_hoje"] == 555
+    assert orcamento["e_aproximacao"] is True, "é proxy por linhas gravadas"
+    _sem_escrita(cursor, conn)
+
+
+def test_operacao_orcamento_estourado_nunca_fica_negativo():
+    cliente, cursor, conn, patches = _cliente(_dispatch_operacao(gastos=900))
+    with patches[0], patches[1], _orcamento_de(600):
+        orcamento = cliente.get("/operacao").json()["orcamento"]
+    assert orcamento["restante_hoje"] == 0
+    _sem_escrita(cursor, conn)
+
+
+def test_operacao_declara_que_nao_rastreia_falhas():
+    """O limite honesto no próprio contrato: sem entrega recente pode ser
+    fonte quebrada OU dia sem novidade, e o banco não distingue."""
+    cliente, cursor, conn, patches = _cliente(_dispatch_operacao())
+    with patches[0], patches[1], _orcamento_de(600):
+        corpo = cliente.get("/operacao").json()
+    assert corpo["rastreia_falhas"] is False
+    _sem_escrita(cursor, conn)
+
+
+# --- /parametros ------------------------------------------------------------
+
+def test_parametros_expoem_frescor_e_politica():
+    """Existe para a interface parar de duplicar esses números."""
+    cliente, cursor, conn, patches = _cliente(lambda q, p: [])
+    with patches[0], patches[1]:
+        corpo = cliente.get("/parametros").json()
+
+    assert corpo["cotacao_frescor_maximo_horas"] == 72
+    assert corpo["politica_resultado_desconhecido"] == "bloquear"
+    _sem_escrita(cursor, conn)
+
+
+# --- /candles ---------------------------------------------------------------
+
+def _dispatch_candles(velas=(), disponiveis=()):
+    def dispatch(query, params):
+        if "DISTINCT intervalo" in query:
+            return [(i,) for i in disponiveis]
+        if "FROM candles" in query:
+            return list(velas)
+        raise AssertionError(f"query não esperada: {query}")
+    return dispatch
+
+
+def test_candles_normaliza_ticker_e_devolve_em_ordem_cronologica():
+    cliente, cursor, conn, patches = _cliente(_dispatch_candles(
+        velas=[
+            (AGORA, 42.10, 42.13, 41.91, 41.91, 2084200),
+            (AGORA, 41.91, 42.00, 41.83, 41.96, 7316300),
+        ],
+        disponiveis=["1d", "1h"],
+    ))
+    with patches[0], patches[1]:
+        corpo = cliente.get("/candles", params={"ticker": "petr4", "intervalo": "1h"}).json()
+
+    assert corpo["ticker"] == "PETR4"
+    assert corpo["intervalos_disponiveis"] == ["1d", "1h"]
+    assert corpo["velas"][0]["maxima"] == 42.13
+    _sem_escrita(cursor, conn)
+
+
+def test_candles_corta_pelas_mais_recentes():
+    """Pedir 200 velas de uma série longa precisa devolver as 200 ÚLTIMAS.
+    O subselect ordena DESC e só o resultado é reordenado para desenho."""
+    capturadas = {}
+
+    def dispatch(query, params):
+        if "DISTINCT intervalo" in query:
+            return []
+        capturadas["query"] = query
+        capturadas["params"] = params
+        return []
+
+    cliente, cursor, conn, patches = _cliente(dispatch)
+    with patches[0], patches[1]:
+        cliente.get("/candles", params={"ticker": "PETR4", "limite": 50})
+
+    assert "ORDER BY abertura_em DESC" in capturadas["query"]
+    assert capturadas["params"][2] == 50
+    _sem_escrita(cursor, conn)
+
+
+def test_candles_limite_e_travado_em_faixa_sa():
+    """Limite absurdo não vira varredura da tabela inteira."""
+    capturado = {}
+
+    def dispatch(query, params):
+        if "DISTINCT intervalo" in query:
+            return []
+        capturado["limite"] = params[2]
+        return []
+
+    for pedido, esperado in ((0, 1), (-5, 1), (99999, 2000)):
+        cliente, cursor, conn, patches = _cliente(dispatch)
+        with patches[0], patches[1]:
+            cliente.get("/candles", params={"ticker": "PETR4", "limite": pedido})
+        assert capturado["limite"] == esperado, f"limite {pedido} → {capturado['limite']}"
+
+
+def test_candles_de_ticker_sem_serie_e_lista_vazia_com_sucesso():
+    cliente, cursor, conn, patches = _cliente(_dispatch_candles())
+    with patches[0], patches[1]:
+        r = cliente.get("/candles", params={"ticker": "XXXX"})
+    assert r.status_code == 200
+    assert r.json()["velas"] == []
+    assert r.json()["intervalos_disponiveis"] == []
+    _sem_escrita(cursor, conn)

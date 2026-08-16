@@ -1,11 +1,179 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "opcoes-ia — leitura da carteira",
-    "description": "Superfície de LEITURA para a interface própria. Não decide, não dispara execução, não escreve. Toda sugestão exposta está pendente de revisão humana — nada aqui representa ordem executada.",
-    "version": "0.1.0"
+    "title": "opcoes-ia — carteira",
+    "description": "Superfície para a interface própria. Não decide, não dispara execução e não manda ordem. A leitura é auditada como somente leitura; a escrita é limitada a escrituração da carteira (cadastro de ativo e registro de posição que o usuário já tem). Toda sugestão exposta está pendente de revisão humana.",
+    "version": "0.2.0"
   },
   "paths": {
+    "/ativos": {
+      "get": {
+        "tags": [
+          "carteira"
+        ],
+        "summary": "Listar Ativos",
+        "description": "Ativos cadastrados — o pré-requisito de todo o resto.\n\n`cotacoes`, `opcoes` e `noticias` têm FK para `ativos`: sem cadastro, o\nETL recusa o ticker e registrar posição em ação falha.",
+        "operationId": "listar_ativos_ativos_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AtivoResposta"
+                  },
+                  "type": "array",
+                  "title": "Response Listar Ativos Ativos Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "carteira"
+        ],
+        "summary": "Cadastrar Ativo",
+        "description": "Cadastra ou CORRIGE um ativo.\n\nRegravar o mesmo ticker atualiza a linha em vez de duplicar ou falhar —\nas cotações já coletadas continuam associadas, porque a chave primária\nnão muda.",
+        "operationId": "cadastrar_ativo_ativos_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AtivoEntrada"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AtivoResposta"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/posicoes": {
+      "get": {
+        "tags": [
+          "carteira"
+        ],
+        "summary": "Listar Posicoes",
+        "description": "Posições em aberto (`fechada_em IS NULL`).",
+        "operationId": "listar_posicoes_posicoes_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PosicaoAbertaResposta"
+                  },
+                  "type": "array",
+                  "title": "Response Listar Posicoes Posicoes Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "carteira"
+        ],
+        "summary": "Registrar Posicao",
+        "description": "Registra uma posição que o usuário JÁ tem.\n\nIsto é escrituração, não ordem: o sistema não fala com corretora em\nlugar nenhum. Quantidade negativa registra posição lançada — o caso da\nvenda coberta.",
+        "operationId": "registrar_posicao_posicoes_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PosicaoEntrada"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PosicaoCriada"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/posicoes/{posicao_id}/encerrar": {
+      "post": {
+        "tags": [
+          "carteira"
+        ],
+        "summary": "Encerrar Posicao",
+        "description": "Marca `fechada_em`. A linha NUNCA é removida: o histórico é o que\npermite explicar uma decisão passada meses depois.",
+        "operationId": "encerrar_posicao_posicoes__posicao_id__encerrar_post",
+        "parameters": [
+          {
+            "name": "posicao_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Posicao Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/carteira": {
       "get": {
         "summary": "Carteira",
@@ -116,10 +284,241 @@
           }
         }
       }
+    },
+    "/resultados": {
+      "get": {
+        "summary": "Resultados",
+        "description": "Calendário de divulgação de resultado por ativo.\n\nDuas coisas que este endpoint não faz, de propósito: não roda o\n`ingest` (a API não dispara) e não decide se a data é boa o bastante —\nquem faz isso é `EarningsRiskService`. Aqui se expõe o estado como ele\nestá no banco, inclusive quando esse estado é \"o usuário registrou e\nninguém consolidou\".",
+        "operationId": "resultados_resultados_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResultadosResposta"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/operacao": {
+      "get": {
+        "summary": "Operacao",
+        "description": "Quando cada fonte entregou dado pela última vez, e quanto do\norçamento diário de requests já foi gasto.\n\nNÃO é um log de execução — o projeto não grava tentativa, erro nem\nduração em lugar nenhum. Por isso a resposta carrega\n`rastreia_falhas=False`: ausência de entrega recente aqui significa\n\"não gravou nada\", que pode ser fonte quebrada ou simplesmente dia sem\nnovidade, e o banco não sabe qual dos dois.",
+        "operationId": "operacao_operacao_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperacaoResposta"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/candles": {
+      "get": {
+        "summary": "Candles",
+        "description": "Velas OHLC de um ticker, mais antigas primeiro.\n\nO corte por `limite` é feito pelas MAIS RECENTES (ORDER BY DESC no\nsubselect) e só depois reordenado para o desenho: pedir 200 velas de uma\nsérie de 5.000 precisa devolver as 200 últimas, não as 200 primeiras.",
+        "operationId": "candles_candles_get",
+        "parameters": [
+          {
+            "name": "ticker",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ticker"
+            }
+          },
+          {
+            "name": "intervalo",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "1h",
+              "title": "Intervalo"
+            }
+          },
+          {
+            "name": "limite",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 200,
+              "title": "Limite"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandlesResposta"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/parametros": {
+      "get": {
+        "summary": "Parametros",
+        "description": "Os parâmetros de `params.yaml` que a interface precisa citar.\n\nSem isto a interface duplicaria a janela de frescor e a política de\nresultado desconhecido — e passaria a mentir em silêncio no dia em que\nesses valores mudassem aqui.",
+        "operationId": "parametros_parametros_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParametrosResposta"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "AtivoEntrada": {
+        "properties": {
+          "ticker": {
+            "type": "string",
+            "title": "Ticker"
+          },
+          "nome": {
+            "type": "string",
+            "title": "Nome",
+            "description": "Obrigatório: o sistema NUNCA deriva nome a partir do ticker"
+          },
+          "tipo": {
+            "type": "string",
+            "title": "Tipo",
+            "description": "acao | fii | bdr",
+            "default": "acao"
+          },
+          "cnpj_raiz": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cnpj Raiz",
+            "description": "8 dígitos, a RAIZ do CNPJ — é o que liga o ativo ao dump da CVM para datas de resultado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ticker",
+          "nome"
+        ],
+        "title": "AtivoEntrada"
+      },
+      "AtivoResposta": {
+        "properties": {
+          "ticker": {
+            "type": "string",
+            "title": "Ticker"
+          },
+          "nome": {
+            "type": "string",
+            "title": "Nome"
+          },
+          "tipo": {
+            "type": "string",
+            "title": "Tipo"
+          },
+          "cnpj_raiz": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cnpj Raiz"
+          },
+          "criado_em": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Criado Em"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ticker",
+          "nome",
+          "tipo",
+          "cnpj_raiz",
+          "criado_em"
+        ],
+        "title": "AtivoResposta"
+      },
+      "CandlesResposta": {
+        "properties": {
+          "ticker": {
+            "type": "string",
+            "title": "Ticker"
+          },
+          "intervalo": {
+            "type": "string",
+            "title": "Intervalo"
+          },
+          "velas": {
+            "items": {
+              "$ref": "#/components/schemas/VelaResposta"
+            },
+            "type": "array",
+            "title": "Velas"
+          },
+          "intervalos_disponiveis": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Intervalos Disponiveis",
+            "description": "Intervalos que já têm vela gravada para este ticker"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ticker",
+          "intervalo",
+          "velas",
+          "intervalos_disponiveis"
+        ],
+        "title": "CandlesResposta",
+        "description": "Série de velas de um ticker, em ordem cronológica.\n\n`intervalo` volta na resposta de propósito: é o que permite a interface\ndesenhar o eixo correto sem supor a granularidade. Trocar o ETL para\ncoletar 15m passa a refletir aqui sem mudança no contrato."
+      },
       "CarteiraResposta": {
         "properties": {
           "posicoes": {
@@ -170,6 +569,49 @@
           "exposicao_pct_por_ativo"
         ],
         "title": "CarteiraResposta"
+      },
+      "ColetaResposta": {
+        "properties": {
+          "canal": {
+            "type": "string",
+            "title": "Canal",
+            "description": "O que é coletado: cotações, opções, notícias, resultados"
+          },
+          "fonte": {
+            "type": "string",
+            "title": "Fonte"
+          },
+          "ultima_entrega_em": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ultima Entrega Em",
+            "description": "Última vez que esta fonte GRAVOU dado. Não é 'última tentativa': uma falha não deixa rastro no banco"
+          },
+          "registros_hoje": {
+            "type": "integer",
+            "title": "Registros Hoje"
+          },
+          "ja_entregou": {
+            "type": "boolean",
+            "title": "Ja Entregou"
+          }
+        },
+        "type": "object",
+        "required": [
+          "canal",
+          "fonte",
+          "ultima_entrega_em",
+          "registros_hoje",
+          "ja_entregou"
+        ],
+        "title": "ColetaResposta"
       },
       "CotacaoResposta": {
         "properties": {
@@ -249,6 +691,199 @@
         ],
         "title": "DesfechoResposta"
       },
+      "EventoResultadoResposta": {
+        "properties": {
+          "ticker": {
+            "type": "string",
+            "title": "Ticker"
+          },
+          "empresa": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Empresa"
+          },
+          "periodo_fiscal": {
+            "type": "string",
+            "title": "Periodo Fiscal"
+          },
+          "data_efetiva": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Efetiva",
+            "description": "A confirmada quando existe, senão a estimada — é esta que o motor de opções consulta"
+          },
+          "data_estimada": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Estimada"
+          },
+          "data_confirmada": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Confirmada",
+            "description": "Coluna separada da estimada de propósito: manter as duas preserva a discordância em vez de apagá-la"
+          },
+          "hora_efetiva": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hora Efetiva"
+          },
+          "sessao": {
+            "type": "string",
+            "title": "Sessao",
+            "description": "UNKNOWN não é ausência a ignorar — é estado que AMPLIA a janela de risco"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "confianca": {
+            "type": "integer",
+            "title": "Confianca"
+          },
+          "faixa_confianca": {
+            "type": "string",
+            "title": "Faixa Confianca"
+          },
+          "confirmado": {
+            "type": "boolean",
+            "title": "Confirmado"
+          },
+          "conflitos": {
+            "items": {},
+            "type": "array",
+            "title": "Conflitos",
+            "description": "Divergências entre fontes, preservadas em vez de resolvidas em silêncio"
+          },
+          "atualizado_em": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Atualizado Em"
+          },
+          "fontes": {
+            "items": {
+              "$ref": "#/components/schemas/FonteResultadoResposta"
+            },
+            "type": "array",
+            "title": "Fontes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ticker",
+          "empresa",
+          "periodo_fiscal",
+          "data_efetiva",
+          "data_estimada",
+          "data_confirmada",
+          "hora_efetiva",
+          "sessao",
+          "status",
+          "confianca",
+          "faixa_confianca",
+          "confirmado",
+          "conflitos",
+          "atualizado_em",
+          "fontes"
+        ],
+        "title": "EventoResultadoResposta"
+      },
+      "FonteResultadoResposta": {
+        "properties": {
+          "provedor": {
+            "type": "string",
+            "title": "Provedor"
+          },
+          "data_reportada": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Reportada"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "confianca": {
+            "type": "integer",
+            "title": "Confianca"
+          },
+          "obtida_em": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Obtida Em"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provedor",
+          "data_reportada",
+          "status",
+          "confianca",
+          "obtida_em",
+          "url"
+        ],
+        "title": "FonteResultadoResposta",
+        "description": "O que UMA fonte afirmou sobre a data, preservado como veio.\n\nLinhas perdedoras de um conflito continuam aqui: são o rastro que\nresponde \"por que o sistema achava isso?\" meses depois."
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -306,6 +941,249 @@
           "amostra"
         ],
         "title": "MotivoDesfechoResposta"
+      },
+      "OperacaoResposta": {
+        "properties": {
+          "coletas": {
+            "items": {
+              "$ref": "#/components/schemas/ColetaResposta"
+            },
+            "type": "array",
+            "title": "Coletas"
+          },
+          "orcamento": {
+            "$ref": "#/components/schemas/OrcamentoResposta"
+          },
+          "ultima_avaliacao_em": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ultima Avaliacao Em"
+          },
+          "rastreia_falhas": {
+            "type": "boolean",
+            "title": "Rastreia Falhas",
+            "description": "Sempre False: nada registra execução com erro. Fonte sem entrega recente pode estar quebrada OU apenas sem novidade — o banco não distingue os dois casos",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "coletas",
+          "orcamento",
+          "ultima_avaliacao_em"
+        ],
+        "title": "OperacaoResposta",
+        "description": "Saúde da coleta, derivada do dado que já existe.\n\nEste recurso NÃO é um log de execução: o projeto não grava tentativas,\nerros nem duração. Ele responde \"quando cada fonte entregou dado pela\núltima vez\", que é o que o banco realmente sabe. `rastreia_falhas`\ndeclara esse limite no próprio contrato para que a interface não\napresente silêncio como se fosse saúde."
+      },
+      "OrcamentoResposta": {
+        "properties": {
+          "fonte": {
+            "type": "string",
+            "title": "Fonte"
+          },
+          "limite_diario": {
+            "type": "integer",
+            "title": "Limite Diario"
+          },
+          "gastos_hoje": {
+            "type": "integer",
+            "title": "Gastos Hoje"
+          },
+          "restante_hoje": {
+            "type": "integer",
+            "title": "Restante Hoje"
+          },
+          "e_aproximacao": {
+            "type": "boolean",
+            "title": "E Aproximacao",
+            "description": "Sempre True: não há tabela de contagem de requests. O gasto é estimado pelas linhas gravadas hoje, o que SUBESTIMA quando um request falha antes de gravar",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "fonte",
+          "limite_diario",
+          "gastos_hoje",
+          "restante_hoje"
+        ],
+        "title": "OrcamentoResposta"
+      },
+      "ParametrosResposta": {
+        "properties": {
+          "cotacao_frescor_maximo_horas": {
+            "type": "number",
+            "title": "Cotacao Frescor Maximo Horas",
+            "description": "Idade máxima da cotação para valer como preço de mercado. Passou disso, a avaliação para como 'dado insuficiente' — não existe fallback para preço médio"
+          },
+          "politica_resultado_desconhecido": {
+            "type": "string",
+            "title": "Politica Resultado Desconhecido"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cotacao_frescor_maximo_horas",
+          "politica_resultado_desconhecido"
+        ],
+        "title": "ParametrosResposta",
+        "description": "Parâmetros de `params.yaml` que a interface precisa para explicar o\nque mostra.\n\nExistem no contrato porque a alternativa é a interface duplicar os\nnúmeros e passar a mentir em silêncio quando eles mudarem aqui."
+      },
+      "PendenteConsolidacaoResposta": {
+        "properties": {
+          "ticker": {
+            "type": "string",
+            "title": "Ticker"
+          },
+          "periodo_fiscal": {
+            "type": "string",
+            "title": "Periodo Fiscal"
+          },
+          "data_resultado": {
+            "type": "string",
+            "format": "date",
+            "title": "Data Resultado"
+          },
+          "sessao": {
+            "type": "string",
+            "title": "Sessao"
+          },
+          "origem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origem"
+          },
+          "registrado_em": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Registrado Em"
+          },
+          "comando_para_consolidar": {
+            "type": "string",
+            "title": "Comando Para Consolidar",
+            "description": "O comando exato que promove esta entrada a evento"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ticker",
+          "periodo_fiscal",
+          "data_resultado",
+          "sessao",
+          "origem",
+          "registrado_em",
+          "comando_para_consolidar"
+        ],
+        "title": "PendenteConsolidacaoResposta",
+        "description": "Data que o usuário registrou e que NUNCA virou evento consultável.\n\nRegistrar não é consolidar: `earnings.manage add` grava o que o usuário\nleu no site de RI, e só `earnings.ingest` promove aquilo para\n`earnings_events`. Sem o segundo passo a data existe no banco e a\navaliação segue bloqueada — a armadilha mais cara deste fluxo, e por\nisso ela é exposta como estado próprio em vez de ficar invisível."
+      },
+      "PosicaoAbertaResposta": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "ticker": {
+            "type": "string",
+            "title": "Ticker"
+          },
+          "tipo_ativo": {
+            "type": "string",
+            "title": "Tipo Ativo"
+          },
+          "quantidade": {
+            "type": "integer",
+            "title": "Quantidade"
+          },
+          "preco_medio": {
+            "type": "number",
+            "title": "Preco Medio"
+          },
+          "aberta_em": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Aberta Em"
+          },
+          "origem": {
+            "type": "string",
+            "title": "Origem"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "ticker",
+          "tipo_ativo",
+          "quantidade",
+          "preco_medio",
+          "aberta_em",
+          "origem"
+        ],
+        "title": "PosicaoAbertaResposta"
+      },
+      "PosicaoCriada": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "executou_ordem": {
+            "type": "boolean",
+            "title": "Executou Ordem",
+            "description": "Sempre False. Registrar posição é espelhar o que já existe na corretora; nada foi enviado a lugar nenhum",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "PosicaoCriada"
+      },
+      "PosicaoEntrada": {
+        "properties": {
+          "ticker": {
+            "type": "string",
+            "title": "Ticker",
+            "description": "Em ACAO é o ticker do ativo (precisa estar cadastrado); em OPCAO é o CÓDIGO da opção, que não é linha em `ativos`"
+          },
+          "tipo_ativo": {
+            "type": "string",
+            "title": "Tipo Ativo",
+            "description": "ACAO | OPCAO"
+          },
+          "quantidade": {
+            "type": "integer",
+            "title": "Quantidade",
+            "description": "Negativo = posição LANÇADA (vendida). É assim que uma venda coberta é registrada"
+          },
+          "preco_medio": {
+            "type": "number",
+            "title": "Preco Medio",
+            "description": "Base de custo — nunca valor de mercado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ticker",
+          "tipo_ativo",
+          "quantidade",
+          "preco_medio"
+        ],
+        "title": "PosicaoEntrada"
       },
       "PosicaoResposta": {
         "properties": {
@@ -384,6 +1262,36 @@
           "valor"
         ],
         "title": "PosicaoResposta"
+      },
+      "ResultadosResposta": {
+        "properties": {
+          "eventos": {
+            "items": {
+              "$ref": "#/components/schemas/EventoResultadoResposta"
+            },
+            "type": "array",
+            "title": "Eventos"
+          },
+          "pendentes_consolidacao": {
+            "items": {
+              "$ref": "#/components/schemas/PendenteConsolidacaoResposta"
+            },
+            "type": "array",
+            "title": "Pendentes Consolidacao"
+          },
+          "politica_resultado_desconhecido": {
+            "type": "string",
+            "title": "Politica Resultado Desconhecido",
+            "description": "O que a avaliação faz sem data confiável: `bloquear` (padrão, conservador) ou `sinalizar`. Reprovação em critério de mercado sempre vence a política"
+          }
+        },
+        "type": "object",
+        "required": [
+          "eventos",
+          "pendentes_consolidacao",
+          "politica_resultado_desconhecido"
+        ],
+        "title": "ResultadosResposta"
       },
       "SugestaoResposta": {
         "properties": {
@@ -509,6 +1417,53 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "VelaResposta": {
+        "properties": {
+          "abertura_em": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Abertura Em",
+            "description": "INÍCIO do período, não o momento da coleta"
+          },
+          "abertura": {
+            "type": "number",
+            "title": "Abertura"
+          },
+          "maxima": {
+            "type": "number",
+            "title": "Maxima"
+          },
+          "minima": {
+            "type": "number",
+            "title": "Minima"
+          },
+          "fechamento": {
+            "type": "number",
+            "title": "Fechamento"
+          },
+          "volume": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume"
+          }
+        },
+        "type": "object",
+        "required": [
+          "abertura_em",
+          "abertura",
+          "maxima",
+          "minima",
+          "fechamento",
+          "volume"
+        ],
+        "title": "VelaResposta"
       }
     }
   }
