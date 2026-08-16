@@ -92,7 +92,7 @@
 
 - [x] 6.1 Rodar `pytest` completo apontando para o banco local descartável e
       confirmar que a suíte segue verde, incluindo os testes de integração.
-- [ ] 6.2 Com `DATABASE_URL` no Neon, cadastrar uma posição por
+- [x] 6.2 Com `DATABASE_URL` no Neon, cadastrar uma posição por
       `python -m src.portfolio.manage`, rodar `fetch_quotes`, `ingest` e o
       relatório, e confirmar que o fluxo funciona igual ao local.
 - [x] 6.3 Confirmar que o banco local continua intacto e utilizável após a
