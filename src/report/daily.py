@@ -236,9 +236,18 @@ def _renderizar_bloqueios(linhas: list[str], bloqueios: list) -> None:
                 marca = "❌"
             linhas.append(f"  - {c.nome}: {c.detalhe} {marca}")
         linhas.append("")
+        # Os DOIS passos: registrar grava o que você leu no RI, consolidar é
+        # o que torna a data consultável pela avaliação. Citar só o primeiro
+        # produzia outro silêncio — o usuário seguia a instrução e continuava
+        # sem sugestão, sem saber por quê.
+        linhas.append("  → destrave com os dois passos:")
         linhas.append(
-            f"  → destrave com: `python -m src.earnings.manage add "
-            f"{b.ticker_objeto} AAAA-MM-DD --sessao AFTER_CLOSE --origem <url do RI>`"
+            f"     1. `python -m src.earnings.manage add {b.ticker_objeto} "
+            "AAAA-MM-DD --sessao AFTER_CLOSE --origem <url do RI>`"
+        )
+        linhas.append(
+            f"     2. `python -m src.earnings.ingest --tickers {b.ticker_objeto}`"
+            "  (registrar não é consolidar)"
         )
         linhas.append("")
 

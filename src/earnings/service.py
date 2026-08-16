@@ -101,14 +101,22 @@ class EarningsEventService:
         self,
         tickers: list[str],
         agora: dt.datetime | None = None,
+        coletado: dict[str, list[EarningsEventSource]] | None = None,
     ) -> list[EarningsEvent]:
         """Ciclo completo: coleta → resolve → persiste.
 
         Nada é gravado sem passar por `aplicar`, que é onde a regra
         "estimativa não derruba confirmação" é aplicada.
+
+        `coletado` permite reaproveitar uma coleta já feita pelo chamador.
+        Existe porque quem opera o comando precisa saber QUAIS fontes
+        responderam — informação que `coletar()` produz e este método
+        descarta. Sem isso, o entrypoint teria de consultar tudo duas vezes
+        (o provider da CVM baixa o dump IPE) ou duplicar esta orquestração.
         """
         agora = agora or dt.datetime.now(dt.timezone.utc)
-        coletado = self.coletar(tickers)
+        if coletado is None:
+            coletado = self.coletar(tickers)
         grupos = self._agrupar(coletado, tickers)
 
         atualizados: list[EarningsEvent] = []

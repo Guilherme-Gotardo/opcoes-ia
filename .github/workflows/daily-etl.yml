@@ -33,6 +33,23 @@ jobs:
         run: python -m src.etl.fetch_news
         continue-on-error: true  # ainda não integrado a uma fonte real
 
+      # Promove as datas de resultado registradas para a tabela que o motor
+      # de opções consulta. Sem este passo, `manage add` grava a data e nada
+      # a torna consultável: o critério de resultado fica indisponível e
+      # nenhuma sugestão sai. SEM continue-on-error de propósito — agenda
+      # desatualizada bloqueia sugestão em silêncio, que é justamente o que
+      # este passo existe para acabar.
+      #
+      # Padrão `manual`: não usa rede, só lê `earnings_manual_entries`.
+      # Para incluir a CVM quando a cobertura for considerada confiável,
+      # basta `--fontes manual,cvm`.
+      #
+      # Quando a avaliação de estratégia entrar no workflow (pendência 3 do
+      # roadmap), ela vai DEPOIS deste passo — consolidar depois de avaliar
+      # só teria efeito no dia seguinte.
+      - name: Consolidar datas de resultado
+        run: python -m src.earnings.ingest
+
 # Pré-requisito: cadastrar DATABASE_URL, OPLAB_TOKEN e BRAPI_TOKEN em
 # Settings > Secrets and variables > Actions no repositório do GitHub.
 # O banco precisa estar acessível pela internet (ex: um Postgres gerenciado

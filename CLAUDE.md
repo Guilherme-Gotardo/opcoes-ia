@@ -34,10 +34,18 @@ python -m src.etl.fetch_options
 python -m src.etl.fetch_news
 
 # datas de divulgação de resultado (espelho manual — leia no site de RI)
+# REGISTRAR NÃO É CONSOLIDAR: `manage add` grava o que você leu; só o
+# `ingest` promove aquilo para a tabela que o motor de opções consulta.
+# Sem o passo 2 a data existe no banco e a avaliação segue bloqueada.
 python -m src.earnings.manage add PETR4 2026-11-06 --sessao AFTER_CLOSE \
-    --origem https://petrobras.com.br/ri/calendario
+    --origem https://petrobras.com.br/ri/calendario   # 1. registrar
+python -m src.earnings.ingest --tickers PETR4                # 2. consolidar
 python -m src.earnings.manage list
 python -m src.earnings.manage remove PETR4 2026Q3
+
+# consolidação completa (padrão: fonte `manual`, tickers da carteira aberta)
+python -m src.earnings.ingest
+python -m src.earnings.ingest --fontes manual,cvm
 
 # rodar testes
 pytest
@@ -54,8 +62,10 @@ docker compose up -d db
 - Pedido sobre **data de resultado / risco de earnings** → `src/earnings/`.
   A ordem de leitura é `models.py` (invariantes) → `confidence.py` (tiers de
   provedor) → `resolution.py` (conflitos) → `risk.py` (o que o motor de
-  opções consome). Regra que atravessa tudo: estimativa nunca sobrescreve
-  confirmação
+  opções consome). Para o caminho do dado até a decisão, `manage.py` (o que
+  o usuário afirma) → `ingest.py` (o que promove aquilo para
+  `earnings_events`). Duas regras que atravessam tudo: estimativa nunca
+  sobrescreve confirmação, e registrar não é consolidar
 - Pedido sobre **valor de posição / patrimônio / exposição** →
   `src/market/valuation.py`. É o único lugar que traduz `cotacoes` em valor;
   `report/daily.py` e `strategy/covered.py` consomem de lá. Regra que
@@ -150,10 +160,13 @@ docker compose up -d db
       `politica_resultado_desconhecido` (`bloquear` padrão | `sinalizar`).
       Reprovação no mérito sempre vence a política. O relatório ganhou a
       seção "Avaliações bloqueadas por data de resultado", com os critérios
-      já verificados e o comando que destrava. **Validado de ponta a ponta
-      em 2026-08-15 com opção sintética (`fonte='sintetico'`): sem data
-      registrada o relatório mostra o bloqueio; com data registrada o
-      sistema emitiu a primeira sugestão da sua história**
+      já verificados e os comandos que destravam. Validado com opção
+      sintética (`fonte='sintetico'`): sem data registrada o relatório
+      mostra o bloqueio. **Correção de 2026-08-16: a anotação anterior
+      dizia que registrar a data bastava para emitir sugestão — não
+      bastava.** `manage add` grava em `earnings_manual_entries` e, até a
+      change `expose-earnings-ingest-entrypoint`, nada promovia aquilo para
+      `earnings_events`; `proximo_evento()` devolvia `None`
 - [x] **Carteira valorizada a preço de mercado e exposição só da parte
       descoberta** (`src/market/valuation.py`, o único lugar que traduz
       `cotacoes` em valor). `exposicao_maxima_pct_ativo` passou a medir

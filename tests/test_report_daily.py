@@ -319,6 +319,10 @@ def test_bloqueio_por_resultado_aparece_com_criterios_e_acao(tmp_path):
     assert "iv_rank: 62.0 (mínimo 50) ✅" in texto, "critérios já verificados ficam visíveis"
     assert "⚠️" in texto, "o critério indisponível não pode virar ❌"
     assert "src.earnings.manage add PETR4" in texto, "precisa dizer como destravar"
+    assert "src.earnings.ingest --tickers PETR4" in texto, (
+        "registrar sozinho não destrava: a consolidação precisa aparecer"
+    )
+    assert "registrar não é consolidar" in texto
 
 
 def test_sem_bloqueio_a_secao_nao_e_criada(tmp_path):
