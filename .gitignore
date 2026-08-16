@@ -9,3 +9,4 @@ data/*
 reports/*
 !reports/.gitkeep
 .claude/settings.local.json
+openapi.json  # gerado por python -m src.api --schema; o versionado é o .d.ts no opcoes-ia-web

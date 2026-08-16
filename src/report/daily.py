@@ -13,46 +13,13 @@ from pathlib import Path
 
 from src.config import get_settings
 from src.db.connection import get_connection
-from src.market.valuation import carregar_params, cotacao_vigente
+from src.market.valuation import carregar_params, visao_carteira
 from src.strategy.outcome_repository import ultima_execucao_do_dia
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 REPORTS_DIR = Path(__file__).resolve().parent.parent.parent / "reports"
-
-
-def _posicoes_abertas(cur) -> list[dict]:
-    cur.execute(
-        "SELECT ticker, tipo_ativo, quantidade, preco_medio FROM posicoes "
-        "WHERE fechada_em IS NULL ORDER BY ticker"
-    )
-    return [
-        {"ticker": t, "tipo_ativo": ta, "quantidade": q, "preco_medio": float(p)}
-        for t, ta, q, p in cur.fetchall()
-    ]
-
-
-def _ticker_objeto_da_opcao(cur, codigo: str) -> str | None:
-    cur.execute(
-        "SELECT ticker_objeto FROM opcoes WHERE codigo = %s "
-        "ORDER BY coletado_em DESC LIMIT 1",
-        (codigo,),
-    )
-    row = cur.fetchone()
-    return row[0] if row else None
-
-
-def _preco_opcao(cur, codigo: str) -> tuple[float | None, dt.datetime | None]:
-    cur.execute(
-        "SELECT preco, coletado_em FROM opcoes WHERE codigo = %s "
-        "ORDER BY coletado_em DESC LIMIT 1",
-        (codigo,),
-    )
-    row = cur.fetchone()
-    if not row or row[0] is None:
-        return None, None
-    return float(row[0]), row[1]
 
 
 def _referencia_de_frescor(data: dt.date) -> dt.datetime:
@@ -70,68 +37,19 @@ def _referencia_de_frescor(data: dt.date) -> dt.datetime:
     return min(agora, fim_do_dia)
 
 
-def _valorizar(cur, posicao: dict, params: dict, agora: dt.datetime) -> None:
-    """Preenche preço de mercado e valor da posição, ou o motivo de não ter.
-
-    Nunca cai para `preco_medio`: valorizar custo como se fosse mercado é o
-    bug que esta função existe para não repetir. Sem cotação utilizável a
-    posição fica sem valor e o relatório diz por quê.
-    """
-    if posicao["tipo_ativo"] == "ACAO":
-        cotacao = cotacao_vigente(cur, posicao["ticker"], params, agora)
-        preco, momento = cotacao.preco, cotacao.coletado_em
-        motivo = None if cotacao.utilizavel else cotacao.motivo
-    else:
-        preco, momento = _preco_opcao(cur, posicao["ticker"])
-        motivo = (
-            None if preco is not None
-            else f"{posicao['ticker']}: nenhum preço de opção coletado"
-        )
-
-    posicao["preco_mercado"] = preco
-    posicao["cotacao_em"] = momento
-    posicao["motivo_sem_cotacao"] = motivo
-    posicao["valor"] = None if preco is None else abs(posicao["quantidade"]) * preco
-
-
 def _resumo_carteira(cur, params: dict, agora: dt.datetime) -> dict:
-    posicoes = _posicoes_abertas(cur)
-    for p in posicoes:
-        _valorizar(cur, p, params, agora)
-
-    # Só posição em AÇÃO entra no patrimônio: o valor de uma opção é derivado
-    # das mesmas ações já contadas, e somar os dois é contagem dupla — a
-    # mesma que inviabilizava o critério de exposição.
-    acoes = [p for p in posicoes if p["tipo_ativo"] == "ACAO"]
-    total_patrimonio = sum(p["valor"] for p in acoes if p["valor"] is not None)
-    sem_cotacao = [
-        p["motivo_sem_cotacao"] for p in posicoes if p["motivo_sem_cotacao"]
-    ]
-    patrimonio_parcial = any(p["valor"] is None for p in acoes)
-
-    exposicao_por_ativo: dict[str, float] = {}
-    for p in posicoes:
-        if p["valor"] is None:
-            continue
-        if p["tipo_ativo"] == "ACAO":
-            objeto = p["ticker"]
-        else:
-            objeto = _ticker_objeto_da_opcao(cur, p["ticker"]) or "desconhecido"
-        exposicao_por_ativo[objeto] = exposicao_por_ativo.get(objeto, 0.0) + p["valor"]
-
-    exposicao_pct = {
-        objeto: (valor / total_patrimonio * 100 if total_patrimonio else 0.0)
-        for objeto, valor in exposicao_por_ativo.items()
-    }
+    """Adaptador fino sobre `visao_carteira` (o domínio, compartilhado com a
+    API). A conversão para dict existe só porque o renderizador Markdown e
+    seus testes falam dict — a conta mora em `src/market/valuation.py`.
+    """
+    visao = visao_carteira(cur, params, agora)
     return {
-        "posicoes": posicoes,
-        "total_patrimonio": total_patrimonio,
-        "patrimonio_parcial": patrimonio_parcial,
-        "tickers_sem_cotacao": [
-            p["ticker"] for p in acoes if p["valor"] is None
-        ],
-        "motivos_sem_cotacao": sem_cotacao,
-        "exposicao_pct_por_ativo": exposicao_pct,
+        "posicoes": [vars(p) for p in visao.posicoes],
+        "total_patrimonio": visao.total_patrimonio,
+        "patrimonio_parcial": visao.patrimonio_parcial,
+        "tickers_sem_cotacao": visao.tickers_sem_cotacao,
+        "motivos_sem_cotacao": visao.motivos_sem_cotacao,
+        "exposicao_pct_por_ativo": visao.exposicao_pct_por_ativo,
     }
 
 

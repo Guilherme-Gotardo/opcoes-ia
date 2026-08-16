@@ -1,0 +1,515 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "opcoes-ia — leitura da carteira",
+    "description": "Superfície de LEITURA para a interface própria. Não decide, não dispara execução, não escreve. Toda sugestão exposta está pendente de revisão humana — nada aqui representa ordem executada.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/carteira": {
+      "get": {
+        "summary": "Carteira",
+        "operationId": "carteira_carteira_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CarteiraResposta"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cotacoes": {
+      "get": {
+        "summary": "Cotacoes",
+        "description": "Cotação mais recente de cada ativo cadastrado — inclusive os SEM\ncotação, representados explicitamente em vez de omitidos.",
+        "operationId": "cotacoes_cotacoes_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CotacaoResposta"
+                  },
+                  "type": "array",
+                  "title": "Response Cotacoes Cotacoes Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sugestoes": {
+      "get": {
+        "summary": "Sugestoes",
+        "operationId": "sugestoes_sugestoes_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SugestaoResposta"
+                  },
+                  "type": "array",
+                  "title": "Response Sugestoes Sugestoes Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/desfecho": {
+      "get": {
+        "summary": "Desfecho",
+        "description": "Desfecho da execução mais recente do dia — por que (não) saiu\nsugestão. Lê o registro que a avaliação gravou; NÃO roda a avaliação.",
+        "operationId": "desfecho_desfecho_get",
+        "parameters": [
+          {
+            "name": "data",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Data"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesfechoResposta"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CarteiraResposta": {
+        "properties": {
+          "posicoes": {
+            "items": {
+              "$ref": "#/components/schemas/PosicaoResposta"
+            },
+            "type": "array",
+            "title": "Posicoes"
+          },
+          "total_patrimonio": {
+            "type": "number",
+            "title": "Total Patrimonio"
+          },
+          "patrimonio_parcial": {
+            "type": "boolean",
+            "title": "Patrimonio Parcial",
+            "description": "True quando alguma posição ficou sem cotação utilizável — o total NÃO cobre a carteira inteira"
+          },
+          "tickers_sem_cotacao": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tickers Sem Cotacao"
+          },
+          "motivos_sem_cotacao": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Motivos Sem Cotacao"
+          },
+          "exposicao_pct_por_ativo": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Exposicao Pct Por Ativo"
+          }
+        },
+        "type": "object",
+        "required": [
+          "posicoes",
+          "total_patrimonio",
+          "patrimonio_parcial",
+          "tickers_sem_cotacao",
+          "motivos_sem_cotacao",
+          "exposicao_pct_por_ativo"
+        ],
+        "title": "CarteiraResposta"
+      },
+      "CotacaoResposta": {
+        "properties": {
+          "ticker": {
+            "type": "string",
+            "title": "Ticker"
+          },
+          "preco": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preco"
+          },
+          "coletado_em": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coletado Em"
+          },
+          "tem_cotacao": {
+            "type": "boolean",
+            "title": "Tem Cotacao"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ticker",
+          "preco",
+          "coletado_em",
+          "tem_cotacao"
+        ],
+        "title": "CotacaoResposta"
+      },
+      "DesfechoResposta": {
+        "properties": {
+          "executado_em": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executado Em",
+            "description": "Momento da avaliação que produziu este desfecho — se ela não rodou hoje, é de outro dia"
+          },
+          "ha_registro": {
+            "type": "boolean",
+            "title": "Ha Registro"
+          },
+          "motivos": {
+            "items": {
+              "$ref": "#/components/schemas/MotivoDesfechoResposta"
+            },
+            "type": "array",
+            "title": "Motivos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "executado_em",
+          "ha_registro",
+          "motivos"
+        ],
+        "title": "DesfechoResposta"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "MotivoDesfechoResposta": {
+        "properties": {
+          "ticker_objeto": {
+            "type": "string",
+            "title": "Ticker Objeto"
+          },
+          "motivo": {
+            "type": "string",
+            "title": "Motivo"
+          },
+          "quantidade": {
+            "type": "integer",
+            "title": "Quantidade"
+          },
+          "criterios_contagem": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Criterios Contagem",
+            "description": "A soma PODE exceder `quantidade`: opção reprovada em dois critérios conta nos dois"
+          },
+          "amostra": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amostra"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ticker_objeto",
+          "motivo",
+          "quantidade",
+          "criterios_contagem",
+          "amostra"
+        ],
+        "title": "MotivoDesfechoResposta"
+      },
+      "PosicaoResposta": {
+        "properties": {
+          "ticker": {
+            "type": "string",
+            "title": "Ticker"
+          },
+          "tipo_ativo": {
+            "type": "string",
+            "title": "Tipo Ativo"
+          },
+          "quantidade": {
+            "type": "integer",
+            "title": "Quantidade"
+          },
+          "preco_medio": {
+            "type": "number",
+            "title": "Preco Medio",
+            "description": "Base de custo — nunca usada como valor"
+          },
+          "preco_mercado": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preco Mercado"
+          },
+          "cotacao_em": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cotacao Em"
+          },
+          "motivo_sem_cotacao": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo Sem Cotacao"
+          },
+          "valor": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ticker",
+          "tipo_ativo",
+          "quantidade",
+          "preco_medio",
+          "preco_mercado",
+          "cotacao_em",
+          "motivo_sem_cotacao",
+          "valor"
+        ],
+        "title": "PosicaoResposta"
+      },
+      "SugestaoResposta": {
+        "properties": {
+          "ticker_objeto": {
+            "type": "string",
+            "title": "Ticker Objeto"
+          },
+          "tipo_operacao": {
+            "type": "string",
+            "title": "Tipo Operacao"
+          },
+          "codigo_opcao": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codigo Opcao"
+          },
+          "strike": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strike"
+          },
+          "vencimento": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vencimento"
+          },
+          "premio_estimado": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Premio Estimado"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "criterios": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Criterios",
+            "description": "Snapshot completo, com a base de valorização"
+          },
+          "pendente_revisao_humana": {
+            "type": "boolean",
+            "title": "Pendente Revisao Humana",
+            "description": "Sempre True: nenhuma sugestão é ordem executada"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ticker_objeto",
+          "tipo_operacao",
+          "codigo_opcao",
+          "strike",
+          "vencimento",
+          "premio_estimado",
+          "status",
+          "criterios",
+          "pendente_revisao_humana"
+        ],
+        "title": "SugestaoResposta"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

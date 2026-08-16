@@ -56,6 +56,16 @@ python -m src.earnings.manage remove PETR4 2026Q3
 python -m src.earnings.ingest
 python -m src.earnings.ingest --fontes manual,cvm
 
+# API de leitura para a interface web (repositório opcoes-ia-web).
+# Três limites, por construção: NÃO decide (critério é determinístico em
+# src/strategy/), NÃO dispara (nenhum endpoint roda ETL/avaliação), NÃO
+# escreve. Sobe só em 127.0.0.1; sem autenticação por decisão registrada
+# (uso local de um usuário) — publicar exige rever isso em change própria.
+python -m src.api
+python -m src.api --schema openapi.json   # exporta o contrato p/ gerar os
+                                          # tipos TS (npm run gerar-tipos
+                                          # no opcoes-ia-web)
+
 # preparar um banco (schema + migrações, idempotente)
 python -m src.db.bootstrap --dry-run   # mostra o alvo, sem escrever
 python -m src.db.bootstrap
@@ -187,6 +197,14 @@ docker compose up -d db
       fontes reais em 2026-08-15: a CVM devolveu 4/5 divulgações do 2T26
       (BBAS3 fora por causa da latência do dump) e o Yahoo 3/5 datas
       futuras — exatamente o que a investigação previu
+- [x] **API de leitura implementada** (`src/api/`, FastAPI) com a interface
+      web em repositório próprio (`opcoes-ia-web`, React+TS). A visão de
+      carteira saiu de `report/daily.py` para `visao_carteira()` em
+      `src/market/valuation.py` — relatório e API leem a MESMA função, por
+      construção. O contrato TS é gerado do OpenAPI
+      (`python -m src.api --schema` → `npm run gerar-tipos`), nunca escrito
+      à mão. A interface mostra o desfecho da ÚLTIMA execução, não do
+      instante — a data da execução acompanha a resposta
 - [x] **Motivo de cada não-sugestão é persistido** (`desfecho_avaliacao`,
       migração 003). Antes, só as sugestões elegíveis iam para `sugestoes`;
       bloqueio por data de resultado, reprovação em critério, dado

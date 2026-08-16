@@ -286,6 +286,143 @@ def cobertura_em_contratos_por_caixa(caixa: float | None, strike: float) -> int:
     return int(caixa // (strike * ACOES_POR_CONTRATO))
 
 
+# ---------------------------------------------------------------------------
+# Visão de carteira por posição — extraída de `report/daily.py`.
+#
+# Era privada do relatório (`_resumo_carteira`, `_valorizar`); virou domínio
+# público porque a API de leitura precisa dos MESMOS números. Uma segunda
+# implementação da valorização por posição seria o formato exato do bug que
+# este módulo existiu para corrigir: relatório e motor de estratégia com
+# noções próprias de "valor da carteira", divergindo sem ninguém notar.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PosicaoValorizada:
+    """Uma posição aberta com sua valorização a mercado — ou o motivo de
+    não ter. `preco_medio` é base de custo e nunca vira `valor`."""
+
+    ticker: str
+    tipo_ativo: str          # 'ACAO' | 'OPCAO'
+    quantidade: int
+    preco_medio: float
+    preco_mercado: float | None = None
+    cotacao_em: dt.datetime | None = None
+    motivo_sem_cotacao: str | None = None
+    valor: float | None = None
+
+
+@dataclass
+class VisaoCarteira:
+    """A carteira como relatório e API a apresentam.
+
+    `patrimonio_parcial` existe para nenhum consumidor apresentar um total
+    que aparente cobrir a carteira inteira quando não cobre.
+    """
+
+    posicoes: list[PosicaoValorizada] = field(default_factory=list)
+    total_patrimonio: float = 0.0
+    patrimonio_parcial: bool = False
+    tickers_sem_cotacao: list[str] = field(default_factory=list)
+    motivos_sem_cotacao: list[str] = field(default_factory=list)
+    exposicao_pct_por_ativo: dict[str, float] = field(default_factory=dict)
+
+
+def preco_opcao_vigente(cur, codigo: str) -> tuple[float | None, dt.datetime | None]:
+    """Último preço coletado de uma opção, com o momento da coleta."""
+    cur.execute(
+        "SELECT preco, coletado_em FROM opcoes WHERE codigo = %s "
+        "ORDER BY coletado_em DESC LIMIT 1",
+        (codigo,),
+    )
+    row = cur.fetchone()
+    if not row or row[0] is None:
+        return None, None
+    return float(row[0]), row[1]
+
+
+def ticker_objeto_da_opcao(cur, codigo: str) -> str | None:
+    cur.execute(
+        "SELECT ticker_objeto FROM opcoes WHERE codigo = %s "
+        "ORDER BY coletado_em DESC LIMIT 1",
+        (codigo,),
+    )
+    row = cur.fetchone()
+    return row[0] if row else None
+
+
+def _valorizar_posicao(
+    cur, posicao: PosicaoValorizada, params: dict, agora: dt.datetime
+) -> None:
+    """Preenche preço de mercado e valor, ou o motivo de não ter.
+
+    Nunca cai para `preco_medio`: valorizar custo como se fosse mercado é o
+    bug que esta função existe para não repetir.
+    """
+    if posicao.tipo_ativo == "ACAO":
+        cotacao = cotacao_vigente(cur, posicao.ticker, params, agora)
+        preco, momento = cotacao.preco, cotacao.coletado_em
+        motivo = None if cotacao.utilizavel else cotacao.motivo
+    else:
+        preco, momento = preco_opcao_vigente(cur, posicao.ticker)
+        motivo = (
+            None if preco is not None
+            else f"{posicao.ticker}: nenhum preço de opção coletado"
+        )
+
+    posicao.preco_mercado = preco
+    posicao.cotacao_em = momento
+    posicao.motivo_sem_cotacao = motivo
+    posicao.valor = None if preco is None else abs(posicao.quantidade) * preco
+
+
+def visao_carteira(cur, params: dict, agora: dt.datetime) -> VisaoCarteira:
+    """A carteira valorizada a mercado, posição a posição.
+
+    Fonte ÚNICA para relatório e API — os dois precisam mostrar os mesmos
+    números por construção, não por coincidência.
+    """
+    cur.execute(
+        "SELECT ticker, tipo_ativo, quantidade, preco_medio FROM posicoes "
+        "WHERE fechada_em IS NULL ORDER BY ticker"
+    )
+    posicoes = [
+        PosicaoValorizada(ticker=t, tipo_ativo=ta, quantidade=q, preco_medio=float(p))
+        for t, ta, q, p in cur.fetchall()
+    ]
+    for p in posicoes:
+        _valorizar_posicao(cur, p, params, agora)
+
+    # Só posição em AÇÃO entra no patrimônio: o valor de uma opção é derivado
+    # das mesmas ações já contadas, e somar os dois é contagem dupla — a
+    # mesma que inviabilizava o critério de exposição.
+    acoes = [p for p in posicoes if p.tipo_ativo == "ACAO"]
+    total = sum(p.valor for p in acoes if p.valor is not None)
+
+    exposicao_por_ativo: dict[str, float] = {}
+    for p in posicoes:
+        if p.valor is None:
+            continue
+        objeto = (
+            p.ticker if p.tipo_ativo == "ACAO"
+            else (ticker_objeto_da_opcao(cur, p.ticker) or "desconhecido")
+        )
+        exposicao_por_ativo[objeto] = exposicao_por_ativo.get(objeto, 0.0) + p.valor
+
+    return VisaoCarteira(
+        posicoes=posicoes,
+        total_patrimonio=total,
+        patrimonio_parcial=any(p.valor is None for p in acoes),
+        tickers_sem_cotacao=[p.ticker for p in acoes if p.valor is None],
+        motivos_sem_cotacao=[
+            p.motivo_sem_cotacao for p in posicoes if p.motivo_sem_cotacao
+        ],
+        exposicao_pct_por_ativo={
+            objeto: (valor / total * 100 if total else 0.0)
+            for objeto, valor in exposicao_por_ativo.items()
+        },
+    )
+
+
 def notional_descoberto_em_carteira(cur, ticker_objeto: str) -> float:
     """Notional descoberto das posições em opção JÁ abertas do ativo.
 

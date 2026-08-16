@@ -193,3 +193,96 @@ def test_put_vendida_conta_integralmente_sem_fonte_de_garantia():
         opcoes_vendidas=[(-1, 36.0, "PUT", "PETR4")],
     )
     assert notional_descoberto_em_carteira(cur, "PETR4") == pytest.approx(3600.0)
+
+
+# --- Visão de carteira (extraída de report/daily.py) ------------------------
+
+class _CursorCarteira:
+    """Dublê para `visao_carteira`: posições, cotações e preços de opção."""
+
+    def __init__(self, posicoes=None, cotacoes=None, precos_opcao=None,
+                 ticker_objeto=None):
+        self.posicoes = posicoes or []          # (ticker, tipo, qtd, preco_medio)
+        self.cotacoes = cotacoes or {}          # ticker -> (preco, coletado_em)
+        self.precos_opcao = precos_opcao or {}  # codigo -> (preco, coletado_em)
+        self.ticker_objeto = ticker_objeto or {}
+        self._res = None
+
+    def execute(self, query, params=()):
+        if "FROM posicoes" in query:
+            self._res = list(self.posicoes)
+        elif "SELECT preco, coletado_em FROM cotacoes" in query:
+            self._res = self.cotacoes.get(params[0])
+        elif "SELECT preco, coletado_em FROM opcoes" in query:
+            self._res = self.precos_opcao.get(params[0])
+        elif "ticker_objeto FROM opcoes" in query:
+            v = self.ticker_objeto.get(params[0])
+            self._res = (v,) if v else None
+        else:
+            raise AssertionError(f"query não esperada: {query}")
+
+    def fetchone(self):
+        return self._res
+
+    def fetchall(self):
+        return self._res
+
+
+def test_visao_carteira_completa():
+    from src.market.valuation import visao_carteira
+    cur = _CursorCarteira(
+        posicoes=[("PETR4", "ACAO", 100, 32.5), ("VALE3", "ACAO", 200, 55.0)],
+        cotacoes={"PETR4": (42.0, AGORA), "VALE3": (71.3, AGORA)},
+    )
+    visao = visao_carteira(cur, PARAMS, AGORA)
+
+    assert visao.total_patrimonio == pytest.approx(100 * 42.0 + 200 * 71.3)
+    assert visao.patrimonio_parcial is False
+    assert visao.posicoes[0].preco_medio == 32.5, "custo continua visível"
+    assert visao.posicoes[0].preco_mercado == 42.0
+    assert visao.exposicao_pct_por_ativo["VALE3"] == pytest.approx(
+        200 * 71.3 / (100 * 42.0 + 200 * 71.3) * 100
+    )
+
+
+def test_visao_carteira_posicao_sem_cotacao_vira_parcial():
+    from src.market.valuation import visao_carteira
+    cur = _CursorCarteira(
+        posicoes=[("PETR4", "ACAO", 100, 32.5), ("VALE3", "ACAO", 200, 55.0)],
+        cotacoes={"PETR4": (42.0, AGORA)},  # VALE3 sem cotação
+    )
+    visao = visao_carteira(cur, PARAMS, AGORA)
+
+    assert visao.patrimonio_parcial is True
+    assert visao.tickers_sem_cotacao == ["VALE3"]
+    assert visao.total_patrimonio == pytest.approx(4200.0), "sem inventar valor"
+    vale = next(p for p in visao.posicoes if p.ticker == "VALE3")
+    assert vale.valor is None
+    assert "nenhuma cotação registrada" in vale.motivo_sem_cotacao
+
+
+def test_visao_carteira_opcao_fora_do_patrimonio():
+    from src.market.valuation import visao_carteira
+    cur = _CursorCarteira(
+        posicoes=[("PETR4", "ACAO", 100, 32.5), ("PETRI450", "OPCAO", -1, 0.85)],
+        cotacoes={"PETR4": (42.0, AGORA)},
+        precos_opcao={"PETRI450": (1.10, AGORA)},
+        ticker_objeto={"PETRI450": "PETR4"},
+    )
+    visao = visao_carteira(cur, PARAMS, AGORA)
+
+    assert visao.total_patrimonio == pytest.approx(4200.0), "opção não soma"
+    opcao = next(p for p in visao.posicoes if p.tipo_ativo == "OPCAO")
+    assert opcao.valor == pytest.approx(1.10), "mas é valorizada"
+    # ...e a exposição dela é atribuída ao ativo-objeto.
+    assert visao.exposicao_pct_por_ativo["PETR4"] == pytest.approx(
+        (4200.0 + 1.10) / 4200.0 * 100
+    )
+
+
+def test_visao_carteira_vazia():
+    from src.market.valuation import visao_carteira
+    visao = visao_carteira(_CursorCarteira(), PARAMS, AGORA)
+    assert visao.posicoes == []
+    assert visao.total_patrimonio == 0.0
+    assert visao.patrimonio_parcial is False

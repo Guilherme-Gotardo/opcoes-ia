@@ -77,10 +77,15 @@ agente de análise, por exemplo, tenha acesso a `Bash` irrestrito sem motivo.
   motivo). É a fonte da seção "Avaliações sem sugestão" do relatório e será
   a da interface — sem isso, "nenhuma sugestão hoje" fica indistinguível de
   "nada valia a pena".
-- ~~**Dashboard**: não há UI ainda...~~ **Resolvido**: a primeira versão é o
-  relatório Markdown estático gerado por `src/report/daily.py`
-  (`reports/<AAAA-MM-DD>.md`, um arquivo por dia). Um dashboard interativo
-  continua como fase futura (Fase 4).
+- ~~**Dashboard**: não há UI ainda...~~ **Resolvido em duas etapas**: o
+  relatório Markdown estático continua existindo, e a Fase 4 virou uma
+  interface web de verdade — API de leitura em `src/api/` (FastAPI, só
+  `127.0.0.1`, sem lógica de decisão) consumida pelo repositório separado
+  `opcoes-ia-web` (React+TS). Separado porque a camada web tem dependências
+  e cadência próprias; o domínio fica aqui e a interface o consome por API
+  com tipos gerados do OpenAPI. Relatório e API leem as mesmas funções de
+  domínio (`visao_carteira`, `ultima_execucao_do_dia`) — divergência entre
+  os dois é impossível por construção, não por disciplina.
 - **Sincronização de custódia real**: a OpLab permite sincronizar com a Área
   do Investidor B3. Avaliar se vale integrar isso diretamente ou manter
   input manual no MVP. Nesta fase, o input é manual via
