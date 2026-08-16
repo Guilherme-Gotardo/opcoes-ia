@@ -26,6 +26,17 @@ jobs:
       - name: Coletar cotações
         run: python -m src.etl.fetch_quotes
 
+      # Uma execução diária basta para a série de 1h: a Brapi devolve os
+      # últimos 5 dias de velas horárias numa requisição só, então o run
+      # após o fechamento preenche o dia inteiro de uma vez. Não é preciso
+      # rodar de hora em hora — e não se deve, porque cada ticker custa um
+      # request do orçamento diário.
+      - name: Coletar velas (1h)
+        run: python -m src.etl.fetch_candles --intervalo 1h
+
+      - name: Coletar velas (1d)
+        run: python -m src.etl.fetch_candles --intervalo 1d
+
       - name: Coletar opções
         run: python -m src.etl.fetch_options
 

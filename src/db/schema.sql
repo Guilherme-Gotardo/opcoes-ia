@@ -212,3 +212,41 @@ CREATE INDEX IF NOT EXISTS idx_desfecho_execucao
     ON desfecho_avaliacao (executado_em DESC);
 CREATE INDEX IF NOT EXISTS idx_desfecho_ticker_motivo
     ON desfecho_avaliacao (ticker_objeto, motivo, executado_em DESC);
+
+-- Candles OHLC por intervalo.
+-- Criada originalmente pela migração 004_candles.sql; replicada aqui para
+-- que um banco novo saia idêntico a um migrado (ver
+-- src/db/migrations/README.md). O raciocínio completo está na migração.
+--
+-- Separada de `cotacoes` porque são coisas diferentes: `cotacoes` é um
+-- preço por instante de coleta (o que a valorização da carteira consome),
+-- uma vela é o resumo de um PERÍODO. O `intervalo` é coluna para que 1d,
+-- 1h e um futuro 15m convivam sem migração nova.
+CREATE TABLE IF NOT EXISTS candles (
+    id              BIGSERIAL PRIMARY KEY,
+    ticker          VARCHAR(12) NOT NULL REFERENCES ativos(ticker),
+    intervalo       VARCHAR(8)  NOT NULL,
+    abertura_em     TIMESTAMPTZ NOT NULL,      -- início do período, em UTC
+    abertura        NUMERIC(14,4) NOT NULL,
+    maxima          NUMERIC(14,4) NOT NULL,
+    minima          NUMERIC(14,4) NOT NULL,
+    fechamento      NUMERIC(14,4) NOT NULL,
+    volume          BIGINT,
+    fonte           VARCHAR(30) NOT NULL,
+    coletado_em     TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT candles_janela_unica UNIQUE (ticker, intervalo, abertura_em),
+    -- Um mapeamento trocado no provedor viraria vela de cabeça para baixo;
+    -- o banco recusa na hora de gravar.
+    CONSTRAINT candles_ohlc_coerente CHECK (
+        maxima >= minima
+        AND maxima >= abertura AND maxima >= fechamento
+        AND minima <= abertura AND minima <= fechamento
+    ),
+    CONSTRAINT candles_precos_positivos CHECK (
+        abertura > 0 AND maxima > 0 AND minima > 0 AND fechamento > 0
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_candles_ticker_intervalo
+    ON candles (ticker, intervalo, abertura_em DESC);
