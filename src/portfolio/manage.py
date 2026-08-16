@@ -11,6 +11,7 @@ Uso:
 import argparse
 import logging
 
+from src.assets.manage import ativo_existe
 from src.db.connection import get_connection
 
 logging.basicConfig(level=logging.INFO)
@@ -51,6 +52,24 @@ def add_posicao(
     if preco_medio <= 0:
         raise PosicaoInvalida(
             f"preco_medio precisa ser maior que zero (recebido: {preco_medio})."
+        )
+
+    # O ativo precisa existir: `cotacoes.ticker` tem FK para `ativos`, então
+    # uma posição em ticker não cadastrado é uma posição que o ETL não
+    # consegue acompanhar. Cadastrar automaticamente exigiria inventar o
+    # nome do ativo, o que a regra 1 do projeto proíbe.
+    #
+    # A validação só vale para ACAO: em OPCAO, `posicoes.ticker` guarda o
+    # CÓDIGO da opção (ex.: PETRJ380), que não é — nem deve ser — linha em
+    # `ativos`. Quem tem FK para `ativos` é `opcoes.ticker_objeto`, e essa
+    # tabela é preenchida pelo ETL, que já valida o ativo-objeto. Não é
+    # esquecimento: derivar o objeto a partir do código exigiria parsing de
+    # código B3, que o projeto não faz em lugar nenhum.
+    if tipo_ativo == "ACAO" and not ativo_existe(ticker):
+        raise PosicaoInvalida(
+            f"ativo não cadastrado: {ticker.upper()}. Cadastre antes de "
+            "registrar a posição:\n"
+            f'  python -m src.assets.manage add {ticker.upper()} "<nome do ativo>" acao'
         )
 
     with get_connection() as conn, conn.cursor() as cur:
@@ -159,7 +178,12 @@ def main(argv: list[str] | None = None) -> None:
     p_list.set_defaults(func=_cmd_list)
 
     args = parser.parse_args(argv)
-    args.func(args)
+    try:
+        args.func(args)
+    except PosicaoInvalida as exc:
+        # Sem isto a orientação de cadastro sairia como traceback, enterrada
+        # — mesmo tratamento de `earnings.manage` e `assets.manage`.
+        parser.exit(2, f"erro: {exc}\n")
 
 
 if __name__ == "__main__":

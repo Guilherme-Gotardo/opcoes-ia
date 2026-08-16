@@ -1,6 +1,7 @@
 """Testes de src.etl.fetch_quotes — validação defensiva do formato da
 resposta da Brapi, isolamento de falha por ticker e respeito ao orçamento
 diário de requests (não dependem de Postgres real)."""
+import logging
 from contextlib import contextmanager
 from unittest.mock import patch
 
@@ -94,6 +95,12 @@ class _FakeSettings:
     brapi_requests_dia_maximo = 600
 
 
+def _todos_cadastrados(tickers):
+    """Dublê de `tickers_cadastrados`: por padrão, todo ticker existe em
+    `ativos` — o caso do não cadastrado tem teste próprio."""
+    return {t.upper() for t in tickers}
+
+
 def test_main_isola_falha_por_ticker(caplog):
     def fake_fetch_um(ticker):
         if ticker == "VALE3":
@@ -105,6 +112,7 @@ def test_main_isola_falha_por_ticker(caplog):
     with patch("src.etl.fetch_quotes.get_connection", _patched_get_connection(fake_conn)), \
          patch.object(fetch_quotes, "get_settings", return_value=_FakeSettings()), \
          patch.object(fetch_quotes, "orcamento_restante_hoje", return_value=1000), \
+         patch.object(fetch_quotes, "tickers_cadastrados", side_effect=_todos_cadastrados), \
          patch.object(fetch_quotes, "fetch_um", side_effect=fake_fetch_um), \
          patch.object(fetch_quotes, "upsert", return_value=1) as mock_upsert:
         main(tickers=["PETR4", "VALE3", "ITUB4"])
@@ -118,6 +126,7 @@ def test_main_respeita_orcamento_diario(caplog):
     with patch("src.etl.fetch_quotes.get_connection", _patched_get_connection(_FakeConnection(_FakeCursor()))), \
          patch.object(fetch_quotes, "get_settings", return_value=_FakeSettings()), \
          patch.object(fetch_quotes, "orcamento_restante_hoje", return_value=1), \
+         patch.object(fetch_quotes, "tickers_cadastrados", side_effect=_todos_cadastrados), \
          patch.object(fetch_quotes, "fetch_um", return_value=COTACAO_VALIDA) as mock_fetch, \
          patch.object(fetch_quotes, "upsert", return_value=1):
         main(tickers=["PETR4", "VALE3", "ITUB4"])
@@ -126,3 +135,39 @@ def test_main_respeita_orcamento_diario(caplog):
     # ficam de fora, sem nenhuma chamada à Brapi para eles
     chamados = [call.args[0] for call in mock_fetch.call_args_list]
     assert chamados == ["PETR4"]
+
+
+def test_ticker_nao_cadastrado_nao_derruba_os_demais(caplog):
+    """Sem o ativo em `ativos`, o INSERT em `cotacoes` violaria a FK. Antes
+    desta verificação, o usuário via a mensagem crua do Postgres, que não
+    diz o que fazer."""
+    cursor = _FakeCursor()
+    fake_conn = _FakeConnection(cursor)
+    with caplog.at_level(logging.ERROR), \
+         patch("src.etl.fetch_quotes.get_connection", _patched_get_connection(fake_conn)), \
+         patch.object(fetch_quotes, "get_settings", return_value=_FakeSettings()), \
+         patch.object(fetch_quotes, "orcamento_restante_hoje", return_value=1000), \
+         patch.object(fetch_quotes, "tickers_cadastrados", return_value={"PETR4"}), \
+         patch.object(fetch_quotes, "fetch_um", side_effect=lambda t: dict(COTACAO_VALIDA, symbol=t)), \
+         patch.object(fetch_quotes, "upsert", return_value=1) as mock_upsert:
+        main(tickers=["PETR4", "XXXX9"])
+
+    processados = [call.args[0][0]["symbol"] for call in mock_upsert.call_args_list]
+    assert processados == ["PETR4"], "o cadastrado continua sendo coletado"
+
+    texto = caplog.text
+    assert "XXXX9" in texto
+    assert "não cadastrado" in texto
+    assert "src.assets.manage add" in texto, "precisa dizer como resolver"
+    assert "cotacoes_ticker_fkey" not in texto, "erro cru do banco não vaza"
+
+
+def test_nenhum_ticker_cadastrado_encerra_sem_gastar_request():
+    with patch("src.etl.fetch_quotes.get_connection", _patched_get_connection(_FakeConnection(_FakeCursor()))), \
+         patch.object(fetch_quotes, "get_settings", return_value=_FakeSettings()), \
+         patch.object(fetch_quotes, "orcamento_restante_hoje", return_value=1000), \
+         patch.object(fetch_quotes, "tickers_cadastrados", return_value=set()), \
+         patch.object(fetch_quotes, "fetch_um") as mock_fetch:
+        main(tickers=["XXXX9"])
+
+    mock_fetch.assert_not_called()

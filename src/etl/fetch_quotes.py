@@ -18,6 +18,7 @@ import logging
 
 import requests
 
+from src.assets.manage import tickers_cadastrados
 from src.config import get_settings
 from src.db.connection import get_connection
 from src.etl.budget import orcamento_restante_hoje
@@ -90,6 +91,26 @@ def main(tickers: list[str] | None = None) -> None:
     with get_connection() as conn, conn.cursor() as cur:
         restante = orcamento_restante_hoje(cur, get_settings().brapi_requests_dia_maximo)
 
+    # Uma consulta só, antes de gastar request: sem o ativo cadastrado, o
+    # INSERT em `cotacoes` viola a FK para `ativos` e o erro que chega ao
+    # usuário é a mensagem crua do Postgres, que não diz o que fazer.
+    # Conferir aqui é mais direto do que capturar `ForeignKeyViolation` e
+    # adivinhar qual constraint falhou — isso acoplaria a mensagem ao nome
+    # da constraint no schema.
+    cadastrados = tickers_cadastrados(tickers)
+    nao_cadastrados = [t for t in tickers if t.upper() not in cadastrados]
+    tickers = [t for t in tickers if t.upper() in cadastrados]
+
+    if nao_cadastrados:
+        log.error(
+            "Ativo não cadastrado (a cotação seria recusada pelo banco): %s. "
+            'Cadastre com: python -m src.assets.manage add <TICKER> "<nome>" acao',
+            ", ".join(sorted(nao_cadastrados)),
+        )
+    if not tickers:
+        log.warning("Nenhum ticker cadastrado para coletar.")
+        return
+
     a_processar, fora_do_orcamento = tickers, []
     if restante < len(tickers):
         a_processar, fora_do_orcamento = tickers[:restante], tickers[restante:]
@@ -111,9 +132,11 @@ def main(tickers: list[str] | None = None) -> None:
             log.error("Falha ao coletar cotação de %s: %s", t, exc)
 
     log.info(
-        "Cotações atualizadas: %d/%d tickers. Falhas: %s. Fora do orçamento: %s",
+        "Cotações atualizadas: %d/%d tickers. Falhas: %s. "
+        "Não cadastrados: %s. Fora do orçamento: %s",
         total, len(tickers),
         sorted(falhas) if falhas else "nenhuma",
+        sorted(nao_cadastrados) if nao_cadastrados else "nenhum",
         sorted(fora_do_orcamento) if fora_do_orcamento else "nenhum",
     )
 

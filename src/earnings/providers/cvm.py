@@ -121,7 +121,8 @@ class CvmProvider:
         if sem_cnpj:
             log.warning(
                 "Sem cnpj_raiz cadastrado em `ativos` (CVM não consegue mapear): %s. "
-                "Registre com: UPDATE ativos SET cnpj_raiz = '33000167' WHERE ticker = 'PETR4';",
+                'Registre com: python -m src.assets.manage add PETR4 "Petrobras PN" '
+                "acao --cnpj-raiz 33000167",
                 ", ".join(sem_cnpj),
             )
         return mapa

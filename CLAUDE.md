@@ -33,6 +33,15 @@ python -m src.etl.fetch_quotes
 python -m src.etl.fetch_options
 python -m src.etl.fetch_news
 
+# cadastro de ativos — PRÉ-REQUISITO de tudo: `cotacoes`, `opcoes` e
+# `noticias` têm FK para `ativos`. Sem cadastrar, o ETL recusa o ticker e
+# registrar posição falha. O nome nunca é derivado do ticker.
+python -m src.assets.manage add PETR4 "Petrobras PN" acao --cnpj-raiz 33000167
+python -m src.assets.manage list
+
+# posições (só depois do ativo cadastrado)
+python -m src.portfolio.manage add PETR4 ACAO 100 32.50
+
 # datas de divulgação de resultado (espelho manual — leia no site de RI)
 # REGISTRAR NÃO É CONSOLIDAR: `manage add` grava o que você leu; só o
 # `ingest` promove aquilo para a tabela que o motor de opções consulta.
@@ -172,9 +181,18 @@ docker compose up -d db
       fontes reais em 2026-08-15: a CVM devolveu 4/5 divulgações do 2T26
       (BBAS3 fora por causa da latência do dump) e o Yahoo 3/5 datas
       futuras — exatamente o que a investigação previu
-- [ ] `ativos.cnpj_raiz` precisa estar preenchido para o `CvmProvider`
-      enxergar o ativo; sem ele o provider apenas avisa e pula. Já
-      cadastrados: PETR4, VALE3, ITUB4, BBAS3, ABEV3
+- [x] **Cadastro de ativos implementado** (`src/assets/manage.py`).
+      `ativos` é a entidade de referência — `cotacoes.ticker`,
+      `opcoes.ticker_objeto` e `noticias.ticker` têm FK para ela — e até
+      2026-08-16 **nada no projeto inseria nessa tabela**: numa base nova o
+      `fetch_quotes` falhava em todo ticker com violação de chave
+      estrangeira. Hoje o ETL e o registro de posição recusam ticker não
+      cadastrado com mensagem que cita o comando, e `--cnpj-raiz` (que o
+      `CvmProvider` usa para mapear o dump da CVM) deixou de exigir
+      `UPDATE` na mão. Cadastrados: PETR4, VALE3, ITUB4, BBAS3, ABEV3.
+      Limitação conhecida: a validação vale para `ACAO`; em `OPCAO`,
+      `posicoes.ticker` guarda o código da opção, que não é linha em
+      `ativos`
 - [ ] Providers da Fase 3 (EODHD, Twelve Data) não implementados —
       dependem de prova de cobertura B3 com plano pago
 - [x] **Critério de resultado integrado ao `strategy/covered.py`**: o

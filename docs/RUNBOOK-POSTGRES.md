@@ -85,11 +85,25 @@ tentativa.
 A instância sobe vazia por decisão — nada foi migrado do banco local, para
 não carregar resíduo de experimentação.
 
+**A ordem importa.** `cotacoes`, `opcoes` e `noticias` têm chave estrangeira
+para `ativos`: sem cadastrar o ativo primeiro, o registro de posição é
+recusado e a coleta de cotações não grava nada.
+
 ```bash
+# 1. o ativo (o nome é seu; o sistema não deriva do ticker)
+python -m src.assets.manage add PETR4 "Petrobras PN" acao --cnpj-raiz 33000167
+
+# 2. a posição
 python -m src.portfolio.manage add PETR4 ACAO 100 32.50
+
+# 3. a data de resultado, se quiser destravar o critério de earnings
 python -m src.earnings.manage add PETR4 AAAA-MM-DD --sessao AFTER_CLOSE --origem <url do RI>
 python -m src.earnings.ingest --tickers PETR4   # registrar não é consolidar
 ```
+
+`--cnpj-raiz` é opcional para a coleta de cotações, mas é o que permite ao
+`CvmProvider` mapear o dump da CVM para o ticker. Sem ele, aquele provider
+avisa e pula o ativo.
 
 ## Rodar os testes sem tocar na carteira
 

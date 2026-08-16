@@ -62,12 +62,18 @@ def _patched_get_connection(fake_conn: _FakeConnection):
     return _fake
 
 
+def _ativo_cadastrado(existe=True):
+    """`add_posicao` consulta `ativos` por outra conexão (a de
+    `assets.manage`), então o dublê é da função, não do cursor."""
+    return patch("src.portfolio.manage.ativo_existe", return_value=existe)
+
+
 def test_add_posicao_acao_valida():
     cursor = _FakeCursor(fetchone_return=(1,))
     fake_conn = _FakeConnection(cursor)
     with patch(
         "src.portfolio.manage.get_connection", _patched_get_connection(fake_conn)
-    ):
+    ), _ativo_cadastrado():
         posicao_id = add_posicao("PETR4", "ACAO", 100, 32.50)
 
     assert posicao_id == 1
@@ -75,6 +81,33 @@ def test_add_posicao_acao_valida():
     query, params = cursor.queries[0]
     assert "INSERT INTO posicoes" in query
     assert params == ("PETR4", "ACAO", 100, 32.50, "manual")
+
+
+def test_add_posicao_acao_em_ativo_nao_cadastrado_e_recusada():
+    """Sem o ativo, `cotacoes` não aceita a cotação desse ticker — a posição
+    ficaria invisível para o ETL."""
+    cursor = _FakeCursor(fetchone_return=(1,))
+    fake_conn = _FakeConnection(cursor)
+    with patch(
+        "src.portfolio.manage.get_connection", _patched_get_connection(fake_conn)
+    ), _ativo_cadastrado(existe=False), pytest.raises(PosicaoInvalida) as exc:
+        add_posicao("XXXX9", "ACAO", 100, 10.0)
+
+    mensagem = str(exc.value)
+    assert "XXXX9" in mensagem, "precisa nomear o ticker"
+    assert "src.assets.manage add" in mensagem, "precisa dizer como resolver"
+    assert cursor.queries == [], "nada pode ser gravado"
+
+
+def test_posicao_em_opcao_nao_exige_ativo_cadastrado():
+    """`posicoes.ticker` guarda o CÓDIGO da opção, que não é linha em
+    `ativos` — quem aponta para lá é `opcoes.ticker_objeto`."""
+    cursor = _FakeCursor(fetchone_return=(7,))
+    fake_conn = _FakeConnection(cursor)
+    with patch(
+        "src.portfolio.manage.get_connection", _patched_get_connection(fake_conn)
+    ), _ativo_cadastrado(existe=False):
+        assert add_posicao("PETRJ380", "OPCAO", -100, 0.85) == 7
 
 
 def test_add_posicao_opcao_vendida_quantidade_negativa():
