@@ -1,0 +1,37 @@
+# Parâmetros de custo e tributação para ESTIMAR o resultado líquido de uma
+# operação. Ajuste conforme sua corretora e confirme as alíquotas com quem
+# cuida da sua declaração.
+#
+# ISTO NÃO É APURAÇÃO FISCAL. O que o sistema calcula é uma estimativa por
+# operação, para você enxergar o que sobra depois dos custos. A apuração de
+# verdade é MENSAL, consolida ganhos e perdas de todas as operações da mesma
+# categoria, carrega prejuízo acumulado de meses anteriores e desconta o
+# IRRF retido. Nada disso acontece aqui.
+#
+# Regras mudam. Estes números são ponto de partida, não autoridade.
+
+# Alíquota sobre o ganho líquido em operações com OPÇÕES, fora de day trade.
+aliquota_opcoes_pct: 15.0
+
+# Alíquota de day trade (abertura e fechamento no mesmo pregão), que é
+# maior. Só se aplica quando a operação é marcada como tal.
+aliquota_day_trade_pct: 20.0
+
+# Alíquota sobre ganho na venda de AÇÃO — usada quando uma call é exercida
+# e a ação é entregue ao strike. Categoria SEPARADA da de opções: a isenção
+# mensal de vendas de ações NÃO vale para opções, e por isso as duas pernas
+# de uma call exercida não podem ser somadas antes de tributar.
+aliquota_acoes_pct: 15.0
+
+# Custo fixo por operação cobrado pela corretora. Muitas zeraram; deixe 0
+# se for o seu caso.
+corretagem_por_operacao: 0.0
+
+# Emolumentos + taxas da B3, como percentual do volume financeiro
+# movimentado. Varia por mercado e por tipo de investidor.
+emolumentos_pct: 0.0325
+
+# Abaixo deste ganho apurado no mês não se recolhe DARF (o valor é
+# carregado para o mês seguinte). Serve para a estimativa não sugerir
+# recolhimento de centavos.
+darf_valor_minimo: 10.0

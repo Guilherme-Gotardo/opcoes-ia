@@ -50,8 +50,45 @@ CREATE TABLE IF NOT EXISTS posicoes (
     preco_medio     NUMERIC(14,4) NOT NULL,
     aberta_em       TIMESTAMPTZ NOT NULL DEFAULT now(),
     fechada_em      TIMESTAMPTZ,               -- NULL = posição em aberto
-    origem          VARCHAR(30) NOT NULL DEFAULT 'manual' -- 'manual' | 'sincronizacao_b3'
+    origem          VARCHAR(30) NOT NULL DEFAULT 'manual', -- 'manual' | 'sincronizacao_b3'
+
+    -- Campos de OPÇÃO (migração 005). NULL em posição de ação.
+    -- `ticker_objeto` é informado, não inferido: `ticker` guarda o código
+    -- da opção, e derivar o objeto exigiria interpretar código B3 — que
+    -- este projeto não faz em lugar nenhum. Sem esta coluna não existe
+    -- ligação entre a opção vendida e a ação que a cobre, e a pergunta
+    -- central da venda coberta ("a ação passou do strike?") fica sem
+    -- resposta.
+    ticker_objeto   VARCHAR(12) REFERENCES ativos(ticker),
+    strike          NUMERIC(14,4),
+    vencimento      DATE,
+
+    -- Desfecho (migração 005). `fechada_em` diz QUANDO fechou, nunca COMO
+    -- — e o resultado depende disso: expirada rende o prêmio inteiro,
+    -- recomprada rende o prêmio menos a recompra, exercida atravessa duas
+    -- categorias fiscais.
+    preco_fechamento  NUMERIC(14,4),
+    motivo_fechamento VARCHAR(20),
+
+    CONSTRAINT posicoes_motivo_fechamento_valido CHECK (
+        motivo_fechamento IS NULL
+        OR motivo_fechamento IN ('expirada', 'recomprada', 'exercida', 'encerrada')
+    ),
+    CONSTRAINT posicoes_fechamento_declarado CHECK (
+        fechada_em IS NULL OR motivo_fechamento IS NOT NULL
+    )
 );
+
+-- O índice de opção por ativo-objeto NÃO fica aqui, e isso é deliberado.
+-- `bootstrap` aplica schema.sql ANTES das migrações. Num banco que já tem
+-- `posicoes`, o `CREATE TABLE IF NOT EXISTS` acima é pulado inteiro — mas
+-- um `CREATE INDEX` solto logo abaixo rodaria e falharia, porque a coluna
+-- só passa a existir quando a migração 005 roda, depois. O índice vive lá,
+-- e um banco novo o recebe do mesmo jeito (bootstrap aplica os dois).
+--
+-- Regra geral que isto estabelece: coisa NOVA em tabela ANTIGA vai só na
+-- migração. `schema.sql` descreve o estado final da tabela, não comandos
+-- avulsos que dependem de colunas recém-criadas.
 CREATE INDEX IF NOT EXISTS idx_posicoes_abertas ON posicoes (ticker) WHERE fechada_em IS NULL;
 
 CREATE TABLE IF NOT EXISTS noticias (
