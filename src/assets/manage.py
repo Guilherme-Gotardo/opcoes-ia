@@ -146,10 +146,84 @@ def tickers_cadastrados(tickers: list[str]) -> set[str]:
         return {linha[0] for linha in cur.fetchall()}
 
 
+def vigiar(ticker: str, motivo: str | None = None) -> None:
+    """Coloca o ativo na watchlist — passa a ser coletado e varrido mesmo
+    sem posição em carteira.
+
+    `motivo` é opcional mas recomendado: é a resposta para "por que este
+    ticker está aqui?", que ninguém lembra meses depois.
+
+    NÃO é de graça: cada vigiado consome do orçamento diário de requests
+    (~4 por ticker entre cotação, velas e opções). Vigiar demais deixa a
+    carteira sem coleta no fim do dia — por isso a escolha é explícita, e
+    não "vigiar tudo que está cadastrado".
+    """
+    ticker = (ticker or "").strip().upper()
+    if not ativo_existe(ticker):
+        raise AtivoInvalido(
+            f"ativo não cadastrado: {ticker}. Cadastre antes de vigiar:\n"
+            f'  python -m src.assets.manage add {ticker} "<nome do ativo>" acao'
+        )
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE ativos
+               SET vigiado = TRUE,
+                   vigiado_motivo = COALESCE(%s, vigiado_motivo),
+                   -- Não reinicia a data em revigiar: perder desde quando
+                   -- está sendo observado apagaria o histórico da decisão.
+                   vigiado_desde = COALESCE(vigiado_desde, now())
+             WHERE ticker = %s
+            """,
+            (motivo, ticker),
+        )
+        conn.commit()
+    log.info("Ativo vigiado: %s (%s)", ticker, motivo or "sem motivo informado")
+
+
+def parar_de_vigiar(ticker: str) -> None:
+    """Tira da watchlist. O cadastro e o histórico permanecem — só deixa de
+    consumir orçamento e de entrar na varredura."""
+    ticker = (ticker or "").strip().upper()
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE ativos SET vigiado = FALSE WHERE ticker = %s", (ticker,)
+        )
+        conn.commit()
+    log.info("Ativo fora da watchlist: %s", ticker)
+
+
+def tickers_vigiados() -> list[str]:
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT ticker FROM ativos WHERE vigiado ORDER BY ticker")
+        return [r[0] for r in cur.fetchall()]
+
+
+def universo_de_analise() -> list[str]:
+    """CARTEIRA ∪ VIGIADOS — o que os ETLs coletam e a varredura percorre.
+
+    A união importa nos dois sentidos: um ativo em carteira entra mesmo sem
+    estar vigiado (senão parar de vigiar deixaria a posição sem preço), e um
+    vigiado entra mesmo sem posição (é o ponto da watchlist).
+    """
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT ticker FROM ativos WHERE vigiado
+            UNION
+            SELECT DISTINCT ticker FROM posicoes
+             WHERE tipo_ativo = 'ACAO' AND fechada_em IS NULL
+            ORDER BY ticker
+            """
+        )
+        return [r[0] for r in cur.fetchall()]
+
+
 def list_ativos() -> list[dict]:
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT ticker, nome, tipo, cnpj_raiz, criado_em "
+            "SELECT ticker, nome, tipo, cnpj_raiz, criado_em, "
+            "       vigiado, vigiado_motivo, vigiado_desde "
             "FROM ativos ORDER BY ticker"
         )
         colunas = [d.name for d in cur.description]

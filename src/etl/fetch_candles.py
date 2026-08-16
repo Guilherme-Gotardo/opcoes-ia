@@ -34,7 +34,7 @@ import logging
 
 import requests
 
-from src.assets.manage import tickers_cadastrados
+from src.assets.manage import tickers_cadastrados, universo_de_analise
 from src.config import get_settings
 from src.db.connection import get_connection
 from src.etl.budget import orcamento_restante_hoje
@@ -206,15 +206,13 @@ def main(
 
 
 def _tickers_da_carteira() -> list[str]:
-    """Ações em carteira. Opção fica de fora: `posicoes.ticker` guarda o
-    CÓDIGO da opção, que não é linha em `ativos` e não tem série histórica
-    própria na Brapi."""
-    with get_connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT DISTINCT ticker FROM posicoes "
-            "WHERE tipo_ativo = 'ACAO' AND fechada_em IS NULL"
-        )
-        return [row[0] for row in cur.fetchall()]
+    """Universo de coleta: CARTEIRA ∪ VIGIADOS (migração 006).
+
+    Opção fica de fora de qualquer jeito: `posicoes.ticker` guarda o CÓDIGO
+    da opção, que não é linha em `ativos` e não tem série histórica própria
+    na Brapi.
+    """
+    return universo_de_analise()
 
 
 if __name__ == "__main__":

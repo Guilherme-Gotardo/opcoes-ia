@@ -13,6 +13,7 @@ import logging
 import requests
 
 from src.config import get_settings
+from src.assets.manage import universo_de_analise
 from src.db.connection import get_connection
 
 logging.basicConfig(level=logging.INFO)
@@ -105,12 +106,13 @@ def main(tickers: list[str] | None = None) -> None:
 
 
 def _tickers_objeto_da_carteira() -> list[str]:
-    with get_connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT DISTINCT ticker FROM posicoes "
-            "WHERE tipo_ativo = 'ACAO' AND fechada_em IS NULL"
-        )
-        return [row[0] for row in cur.fetchall()]
+    """Universo de coleta: CARTEIRA ∪ VIGIADOS (migração 006).
+
+    É o que permite procurar oportunidade em opção de ativo que ainda não
+    se tem — sem isso a cadeia só era coletada para o que já estava em
+    carteira, e nenhuma varredura era possível.
+    """
+    return universo_de_analise()
 
 
 if __name__ == "__main__":

@@ -6,7 +6,15 @@ CREATE TABLE IF NOT EXISTS ativos (
     nome            VARCHAR(120) NOT NULL,
     tipo            VARCHAR(20) NOT NULL,      -- 'acao', 'fii', 'bdr'
     cnpj_raiz       VARCHAR(8),                -- raiz do CNPJ; mapeia o dump da CVM
-    criado_em       TIMESTAMPTZ NOT NULL DEFAULT now()
+    criado_em       TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    -- Watchlist (migração 006). Vigiar é atributo do cadastro: só se vigia
+    -- o que está aqui, e o universo de coleta é CARTEIRA ∪ VIGIADOS.
+    -- `vigiado_motivo` guarda por que entrou — a pergunta que aparece
+    -- meses depois.
+    vigiado         BOOLEAN NOT NULL DEFAULT FALSE,
+    vigiado_motivo  TEXT,
+    vigiado_desde   TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_ativos_cnpj_raiz ON ativos (cnpj_raiz);
 
@@ -287,3 +295,25 @@ CREATE TABLE IF NOT EXISTS candles (
 
 CREATE INDEX IF NOT EXISTS idx_candles_ticker_intervalo
     ON candles (ticker, intervalo, abertura_em DESC);
+
+
+-- Lançamentos de caixa/garantia (migração 006).
+-- É o que faltava para avaliar PUT coberta contra a carteira real:
+-- `avaliar()` exige `caixa_disponivel` — sem garantia para honrar o
+-- exercício ao strike, a operação não é coberta.
+--
+-- Tabela de LANÇAMENTOS, não saldo único: um saldo que se sobrescreve
+-- perde a história de como chegou ali, e é a história que explica uma
+-- decisão passada. O saldo é a soma.
+CREATE TABLE IF NOT EXISTS caixa_lancamentos (
+    id              BIGSERIAL PRIMARY KEY,
+    valor           NUMERIC(14,2) NOT NULL,   -- + aporte, - retirada
+    descricao       TEXT,
+    ocorrido_em     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    registrado_em   TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT caixa_valor_nao_zero CHECK (valor <> 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_caixa_ocorrido
+    ON caixa_lancamentos (ocorrido_em DESC);

@@ -18,7 +18,7 @@ import logging
 
 import requests
 
-from src.assets.manage import tickers_cadastrados
+from src.assets.manage import tickers_cadastrados, universo_de_analise
 from src.config import get_settings
 from src.db.connection import get_connection
 from src.etl.budget import orcamento_restante_hoje
@@ -142,13 +142,14 @@ def main(tickers: list[str] | None = None) -> None:
 
 
 def _tickers_da_carteira() -> list[str]:
-    """Lê os tickers de ações atualmente em carteira (posições abertas)."""
-    with get_connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT DISTINCT ticker FROM posicoes "
-            "WHERE tipo_ativo = 'ACAO' AND fechada_em IS NULL"
-        )
-        return [row[0] for row in cur.fetchall()]
+    """Universo de coleta: CARTEIRA ∪ VIGIADOS (migração 006).
+
+    Antes era só a carteira, o que fechava a porta para procurar
+    oportunidade em ativo que ainda não se tem. A união importa nos dois
+    sentidos: ativo em carteira entra mesmo sem estar vigiado — senão parar
+    de vigiar deixaria a posição sem preço.
+    """
+    return universo_de_analise()
 
 
 if __name__ == "__main__":

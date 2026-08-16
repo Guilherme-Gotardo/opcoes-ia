@@ -47,6 +47,21 @@ python -m src.assets.manage list
 # posições (só depois do ativo cadastrado)
 python -m src.portfolio.manage add PETR4 ACAO 100 32.50
 
+# watchlist — vigiar ativo SEM ter posição, para procurar oportunidade nele.
+# O universo de coleta e de varredura é CARTEIRA ∪ VIGIADOS. Não é de graça:
+# cada vigiado consome ~4 requests/dia do orçamento (cotação + 2 janelas de
+# vela + opções), então 600/dia comportam ~150 tickers no total.
+python -m src.assets.manage vigiar ITUB4 --motivo "liquidez alta em opções"
+python -m src.assets.manage parar-de-vigiar ITUB4
+
+# caixa/garantia — o que torna uma PUT coberta, coberta. `avaliar()` exige
+# `caixa_disponivel`; sem lançamento, o saldo é zero e a put é recusada.
+# São LANÇAMENTOS, não saldo: o saldo é a soma, e o sinal preserva o que
+# aconteceu (positivo aporta, negativo retira).
+python -m src.caixa.manage add 20000 --descricao "aporte para garantia"
+python -m src.caixa.manage saldo
+python -m src.caixa.manage extrato
+
 # datas de divulgação de resultado (espelho manual — leia no site de RI)
 # REGISTRAR NÃO É CONSOLIDAR: `manage add` grava o que você leu; só o
 # `ingest` promove aquilo para a tabela que o motor de opções consulta.
@@ -323,8 +338,22 @@ docker compose up -d db
       de `cotacao_frescor_maximo_horas` (padrão 72h) a avaliação para como
       "dado insuficiente" nomeando ticker e idade; **não existe fallback
       para `preco_medio`**
-- [ ] Não há, ainda, forma de registrar caixa/garantia disponível — covered
-      put não é avaliado automaticamente contra a carteira real por isso
+- [x] **Caixa/garantia registrável** (`src/caixa/manage.py`, migração 006),
+      o que destrava a avaliação de covered put contra a carteira real —
+      `avaliar()` já exigia `caixa_disponivel` e não havia onde gravá-lo.
+      São LANÇAMENTOS, não saldo único: um saldo sobrescrito perde como se
+      chegou até ele, e é esse "como" que explica meses depois por que uma
+      avaliação aceitou ou recusou a operação
+- [x] **Watchlist** (migração 006): `ativos.vigiado` marca ativo a ser
+      observado SEM ter posição, e o universo de coleta/varredura virou
+      CARTEIRA ∪ VIGIADOS nos três ETLs. Até então tudo partia de `posicoes`
+      abertas, o que estava certo para venda coberta ("coberta" = as ações
+      já são suas) mas fechava a porta para procurar oportunidade em ativo
+      que ainda não se tem. É coluna em `ativos` e não tabela nova porque
+      vigiar é atributo do cadastro — só se vigia o que já é alvo das FKs.
+      **O orçamento continua sendo o teto real**: ~4 requests/dia por
+      ticker, 600/dia, ~150 tickers no total — varrer a bolsa inteira não
+      cabe, e por isso a escolha é explícita
 - [ ] **Concentração da carteira não é barrada por nenhum critério** — e
       isso é deliberado. `exposicao_maxima_pct_ativo` limita opção
       descoberta, não o quanto do patrimônio está num único ativo. Quem
