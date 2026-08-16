@@ -363,6 +363,10 @@ class VisaoCarteira:
     patrimonio_parcial: bool = False
     tickers_sem_cotacao: list[str] = field(default_factory=list)
     motivos_sem_cotacao: list[str] = field(default_factory=list)
+    #: Quanto do PATRIMÔNIO está em cada ativo. Como o patrimônio conta só
+    #: ação, o numerador também — as fatias somam 100%. Não mede exposição a
+    #: opção: para isso existe `notional_descoberto_em_carteira`, com outra
+    #: semântica (parte descoberta, não valor de posição).
     exposicao_pct_por_ativo: dict[str, float] = field(default_factory=dict)
 
 
@@ -377,16 +381,6 @@ def preco_opcao_vigente(cur, codigo: str) -> tuple[float | None, dt.datetime | N
     if not row or row[0] is None:
         return None, None
     return float(row[0]), row[1]
-
-
-def ticker_objeto_da_opcao(cur, codigo: str) -> str | None:
-    cur.execute(
-        "SELECT ticker_objeto FROM opcoes WHERE codigo = %s "
-        "ORDER BY coletado_em DESC LIMIT 1",
-        (codigo,),
-    )
-    row = cur.fetchone()
-    return row[0] if row else None
 
 
 def _valorizar_posicao(
@@ -437,15 +431,30 @@ def visao_carteira(cur, params: dict, agora: dt.datetime) -> VisaoCarteira:
     acoes = [p for p in posicoes if p.tipo_ativo == "ACAO"]
     total = sum(p.valor for p in acoes if p.valor is not None)
 
+    # O numerador cobre a MESMA coisa que o denominador: só ação.
+    #
+    # Antes somava também o valor das opções, com o total continuando
+    # stock-only — numerador e denominador mediam coisas diferentes, e as
+    # fatias podiam passar de 100%. Não era hipótese: o teste que descrevia
+    # o comportamento afirmava exatamente `(4200 + 1,10) / 4200`.
+    #
+    # Pior, `_valorizar_posicao` usa `abs(quantidade)`, então uma call
+    # LANÇADA entrava com valor positivo e INFLAVA a concentração do ativo
+    # — o oposto do que uma venda coberta faz com a exposição. Ficou latente
+    # só porque `opcoes` está vazia enquanto o ETL do provedor está
+    # bloqueado; passaria a mentir no dia em que houvesse preço de opção.
+    #
+    # Isto NÃO é a exposição a opção — essa tem medida própria e outra
+    # semântica (`notional_descoberto_em_carteira`, usada pelo critério de
+    # estratégia). Aqui se responde "quanto do patrimônio está em cada
+    # ativo", e o patrimônio é de ações.
     exposicao_por_ativo: dict[str, float] = {}
-    for p in posicoes:
+    for p in acoes:
         if p.valor is None:
             continue
-        objeto = (
-            p.ticker if p.tipo_ativo == "ACAO"
-            else (ticker_objeto_da_opcao(cur, p.ticker) or "desconhecido")
+        exposicao_por_ativo[p.ticker] = (
+            exposicao_por_ativo.get(p.ticker, 0.0) + p.valor
         )
-        exposicao_por_ativo[objeto] = exposicao_por_ativo.get(objeto, 0.0) + p.valor
 
     return VisaoCarteira(
         posicoes=posicoes,

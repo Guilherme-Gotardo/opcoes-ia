@@ -261,7 +261,18 @@ def test_visao_carteira_posicao_sem_cotacao_vira_parcial():
     assert "nenhuma cotação registrada" in vale.motivo_sem_cotacao
 
 
-def test_visao_carteira_opcao_fora_do_patrimonio():
+def test_visao_carteira_opcao_fora_do_patrimonio_e_da_exposicao():
+    """Opção fica fora das DUAS contas, não de uma só.
+
+    A versão anterior somava o valor da opção no numerador da exposição e
+    dividia pelo patrimônio, que conta só ação — as fatias passavam de 100%.
+    O teste antigo afirmava isso literalmente: `(4200 + 1,10) / 4200`.
+
+    Pior, `_valorizar_posicao` usa `abs(quantidade)`: uma call LANÇADA
+    entrava com valor positivo e inflava a concentração do ativo, que é o
+    oposto do que uma venda coberta faz. Ficava latente só porque `opcoes`
+    está vazia enquanto o ETL do provedor está bloqueado.
+    """
     from src.market.valuation import visao_carteira
     cur = _CursorCarteira(
         posicoes=[("PETR4", "ACAO", 100, 32.5), ("PETRI450", "OPCAO", -1, 0.85)],
@@ -273,10 +284,30 @@ def test_visao_carteira_opcao_fora_do_patrimonio():
 
     assert visao.total_patrimonio == pytest.approx(4200.0), "opção não soma"
     opcao = next(p for p in visao.posicoes if p.tipo_ativo == "OPCAO")
-    assert opcao.valor == pytest.approx(1.10), "mas é valorizada"
-    # ...e a exposição dela é atribuída ao ativo-objeto.
-    assert visao.exposicao_pct_por_ativo["PETR4"] == pytest.approx(
-        (4200.0 + 1.10) / 4200.0 * 100
+    assert opcao.valor == pytest.approx(1.10), "mas continua valorizada"
+
+    assert visao.exposicao_pct_por_ativo["PETR4"] == pytest.approx(100.0)
+    assert sum(visao.exposicao_pct_por_ativo.values()) == pytest.approx(100.0)
+
+
+def test_exposicao_soma_cem_por_cento_com_varios_ativos():
+    """A propriedade que a incoerência quebrava: as fatias fecham em 100%."""
+    from src.market.valuation import visao_carteira
+    cur = _CursorCarteira(
+        posicoes=[
+            ("PETR4", "ACAO", 100, 32.5),
+            ("VALE3", "ACAO", 200, 55.0),
+            ("PETRI450", "OPCAO", -100, 0.85),
+        ],
+        cotacoes={"PETR4": (42.0, AGORA), "VALE3": (71.3, AGORA)},
+        precos_opcao={"PETRI450": (1.10, AGORA)},
+        ticker_objeto={"PETRI450": "PETR4"},
+    )
+    visao = visao_carteira(cur, PARAMS, AGORA)
+
+    assert sum(visao.exposicao_pct_por_ativo.values()) == pytest.approx(100.0)
+    assert set(visao.exposicao_pct_por_ativo) == {"PETR4", "VALE3"}, (
+        "opção não vira fatia própria nem infla a do objeto"
     )
 
 
