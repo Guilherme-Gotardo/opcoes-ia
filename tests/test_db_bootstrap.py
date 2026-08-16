@@ -81,6 +81,9 @@ def test_schema_vem_antes_das_migracoes():
 
 def test_database_url_ausente_falha_com_codigo_nao_zero(monkeypatch, capsys):
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    # "Ausente" significa ausente do shell E do .env — o bootstrap carrega o
+    # arquivo desde o conserto do load_dotenv, então o dublê o neutraliza.
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
     codigo = bootstrap.main([])
     assert codigo != 0
     assert "DATABASE_URL" in capsys.readouterr().err

@@ -100,6 +100,9 @@ def _database_url() -> str:
     `Settings.load()` exige também `OPLAB_TOKEN` e `BRAPI_TOKEN`, e preparar
     um banco não deveria depender de credencial de provedor de mercado.
     """
+    from dotenv import load_dotenv  # noqa: PLC0415
+
+    load_dotenv(DB_DIR.parent.parent / ".env")
     url = os.getenv("DATABASE_URL")
     if not url:
         raise BootstrapError(

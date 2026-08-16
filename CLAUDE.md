@@ -270,12 +270,15 @@ docker compose up -d db
       insuficiente" — todo par posição×opção é reprovado antes de olhar
       IV rank ou delta. O gap do calendário curto-circuita a avaliação
       inteira, não é só um critério a menos
-- [ ] `python-dotenv` está em `requirements.txt` mas nenhum módulo chama
-      `load_dotenv()` — hoje é preciso exportar as variáveis de `.env` no
-      shell manualmente antes de rodar qualquer comando (`python -m
-      src.etl.fetch_quotes` etc. falham com "Variáveis de ambiente
-      ausentes" caso contrário); considerar corrigir antes do próximo
-      onboarding
+- [x] **`.env` é carregado automaticamente** (`load_dotenv` em
+      `src/config.py` e em `src/db/bootstrap.py`, que não importa config de
+      propósito). A pendência mordeu de verdade em 2026-08-16: `python -m
+      src.api` falhava com "Variáveis de ambiente ausentes" mesmo com o
+      `.env` preenchido. Variável exportada no shell tem precedência sobre o
+      arquivo. Efeito colateral documentado: um `pytest` sem `DATABASE_URL`
+      explícito agora encontra o Neon pelo `.env` — a convenção de rodar a
+      suíte contra o banco descartável (ver "Comandos úteis") ficou mais
+      importante, não menos
 - [ ] Agente `strategy-covered` validado contra o fluxo real de ponta a
       ponta (posições, cotações Brapi, relatório); ainda falta validar com
       dados reais de opções (depende de `fetch_options.py`/Brapi Pro acima)
