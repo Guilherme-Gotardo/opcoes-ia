@@ -59,27 +59,66 @@ def carregar_params(path: Path | None = None) -> dict:
     return yaml.safe_load(path.read_text()) or {}
 
 
-def frescor_maximo_horas(params: dict) -> float:
-    """Lê a janela de frescor, com `DEFAULT_FRESCOR_HORAS` como padrão.
+def _horas_positivas(params: dict, chave: str, padrao: float) -> float:
+    """Lê uma janela de horas de `params.yaml`, com padrão declarado.
 
     Valor inválido falha alto em vez de cair no default: um fallback
     silencioso aqui mudaria a postura de risco sem o usuário perceber —
     mesma regra de `politica_resultado_desconhecido`.
     """
-    if "cotacao_frescor_maximo_horas" not in params:
-        return float(DEFAULT_FRESCOR_HORAS)
-    valor = params["cotacao_frescor_maximo_horas"]
+    if chave not in params:
+        return float(padrao)
+    valor = params[chave]
     if isinstance(valor, bool) or not isinstance(valor, (int, float)):
         raise ParametroInvalido(
-            "cotacao_frescor_maximo_horas precisa ser um número de horas em "
-            f"params.yaml (recebido: {valor!r})."
+            f"{chave} precisa ser um número de horas em params.yaml "
+            f"(recebido: {valor!r})."
         )
     if valor <= 0 or math.isnan(valor) or math.isinf(valor):
         raise ParametroInvalido(
-            "cotacao_frescor_maximo_horas precisa ser maior que zero e finito "
-            f"(recebido: {valor!r})."
+            f"{chave} precisa ser maior que zero e finito (recebido: {valor!r})."
         )
     return float(valor)
+
+
+def frescor_maximo_horas(params: dict) -> float:
+    """Janela de frescor da COTAÇÃO da ação."""
+    return _horas_positivas(
+        params, "cotacao_frescor_maximo_horas", DEFAULT_FRESCOR_HORAS
+    )
+
+
+def frescor_maximo_horas_opcao(params: dict) -> float:
+    """Janela de frescor do DADO DA OPÇÃO (preço, delta, IV rank).
+
+    Chave própria, e não a mesma da cotação, porque as duas grandezas
+    envelhecem em ritmos diferentes: o preço da ação sobrevive a um fim de
+    semana, enquanto delta e IV rank de uma opção mudam com o tempo até o
+    vencimento mesmo sem negócio novo. Quem quiser uma janela mais curta
+    para opção configura `opcao_frescor_maximo_horas` sem encurtar a da
+    ação junto.
+
+    O padrão é a janela da cotação: mudar a postura de risco por omissão
+    seria pior do que a assimetria que este parâmetro corrige.
+    """
+    return _horas_positivas(
+        params, "opcao_frescor_maximo_horas", frescor_maximo_horas(params)
+    )
+
+
+def idade_em_horas(
+    momento: dt.datetime | None, agora: dt.datetime | None = None
+) -> float | None:
+    """Horas decorridas desde `momento`, ou `None` se não houver momento.
+
+    Público porque a mesma conta é feita para cotação de ação e para dado de
+    opção — duplicá-la abriria espaço para as duas divergirem no tratamento
+    de fuso, que é exatamente onde esse tipo de bug mora.
+    """
+    if momento is None:
+        return None
+    agora = _como_utc(agora or dt.datetime.now(dt.timezone.utc))
+    return (agora - _como_utc(momento)).total_seconds() / 3600
 
 
 def _como_utc(momento: dt.datetime) -> dt.datetime:

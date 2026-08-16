@@ -72,6 +72,8 @@ from src.market.valuation import (
     ACOES_POR_CONTRATO,
     cobertura_disponivel_em_contratos,
     cotacao_vigente,
+    frescor_maximo_horas_opcao,
+    idade_em_horas,
     notional_descoberto,
     notional_descoberto_em_carteira,
     patrimonio_a_mercado,
@@ -182,8 +184,14 @@ class ResultadoAvaliacao:
 #: reprovado por "dado insuficiente" antes de olhar IV rank ou delta —
 #: nenhuma sugestão podia ser emitida, em nenhuma circunstância. Agora ele
 #: é um critério de três estados, avaliado junto dos demais.
+#: `strike` entrou nesta lista em 2026-08-16. Ele já era obrigatório de
+#: fato — a garantia do covered put e o notional descoberto do covered call
+#: dependem dele — mas ninguém conferia: no covered call o orquestrador
+#: fazia `strike or 0.0`, e um strike nulo virava notional ZERO, ou seja,
+#: exposição zero, ou seja, o critério de exposição PASSAVA. Um dado
+#: faltando aprovava o critério que deveria barrar.
 _CAMPOS_MERCADO_OBRIGATORIOS = (
-    "iv_rank", "delta", "dias_vencimento", "preco",
+    "iv_rank", "delta", "dias_vencimento", "preco", "strike",
     "exposicao_pct_apos_operacao",
 )
 
@@ -222,9 +230,14 @@ def avaliar(posicao: dict, opcao: dict, params: dict) -> ResultadoAvaliacao:
               "vencimento": str, "preco": float, "delta": float,
               "iv_rank": float, "dias_vencimento": int,
               "exposicao_pct_apos_operacao": float,
+              "idade_horas": float,
               "dias_para_resultado": int | None}
               (campos ausentes/`None` em qualquer chave obrigatória =
               "dado insuficiente", nunca um valor assumido)
+
+              `idade_horas` é a idade do dado da opção. Sem ela não há como
+              saber se preço, delta e IV rank ainda valem — e "não sei" é
+              dado insuficiente, não permissão para usar.
     """
     tipo_operacao = "covered_call" if opcao["tipo"] == "CALL" else "covered_put"
     resultado = ResultadoAvaliacao(
@@ -242,21 +255,40 @@ def avaliar(posicao: dict, opcao: dict, params: dict) -> ResultadoAvaliacao:
     # 1. Pré-requisito estrutural (antes de qualquer critério de mercado)
     if tipo_operacao == "covered_call":
         qtd = posicao["quantidade"]
-        if qtd < 100 or qtd % 100 != 0:
+        if qtd < ACOES_POR_CONTRATO or qtd % ACOES_POR_CONTRATO != 0:
             resultado.motivo_nao_elegivel = (
                 f"lote insuficiente para covered call: {qtd} ações em "
-                "carteira (mínimo 100, múltiplos de 100)"
+                f"carteira (mínimo {ACOES_POR_CONTRATO}, múltiplos de "
+                f"{ACOES_POR_CONTRATO})"
             )
             return resultado
     else:  # covered_put
+        # `strike` é conferido AQUI, e não só na checagem de campos
+        # obrigatórios lá embaixo, porque a garantia é calculada antes
+        # dela. Sem esta guarda, `strike` nulo — que o próprio ETL prevê,
+        # gravando NULL quando o provedor não devolve — estourava
+        # TypeError no meio da avaliação em vez de virar "dado
+        # insuficiente", quebrando a garantia central do desenho: campo
+        # ausente NUNCA é assumido nem derruba a execução.
+        strike = opcao.get("strike")
+        if strike is None:
+            resultado.motivo_nao_elegivel = (
+                "dado insuficiente: strike ausente — sem ele não há garantia "
+                "a calcular para covered put"
+            )
+            return resultado
+
         caixa = posicao.get("caixa_disponivel")
-        garantia_necessaria = opcao["strike"] * 100
         if caixa is None:
             resultado.motivo_nao_elegivel = (
                 "dado insuficiente: caixa/garantia disponível não informado "
                 "para avaliar covered put"
             )
             return resultado
+
+        # Só depois das duas guardas: antes, o cálculo rodava mesmo no
+        # caminho que ia terminar em "caixa não informado".
+        garantia_necessaria = strike * ACOES_POR_CONTRATO
         if caixa < garantia_necessaria:
             resultado.motivo_nao_elegivel = (
                 f"caixa insuficiente para covered put: {caixa} disponível, "
@@ -275,6 +307,31 @@ def avaliar(posicao: dict, opcao: dict, params: dict) -> ResultadoAvaliacao:
     if posicao.get("preco_mercado") is None:
         motivo = posicao.get("motivo_sem_cotacao") or "sem cotação utilizável"
         resultado.motivo_nao_elegivel = f"dado insuficiente: {motivo}"
+        return resultado
+
+    # 1c. O dado da OPÇÃO também precisa estar fresco.
+    #     Antes, a janela de frescor valia só para o preço da ação: uma
+    #     opção coletada dias atrás entrava em iv_rank e delta como se fosse
+    #     de agora. A assimetria não tinha razão de ser — se um preço de
+    #     ação velho impede decidir, delta e IV rank velhos impedem mais,
+    #     porque envelhecem mesmo sem negócio novo.
+    #
+    #     Fica entre os pré-requisitos, e não entre os critérios, pela mesma
+    #     razão do preço de mercado: não é um critério a menos, é a
+    #     impossibilidade de avaliar os que dependem desses números.
+    idade_opcao = opcao.get("idade_horas")
+    limite_opcao = frescor_maximo_horas_opcao(params)
+    if idade_opcao is None:
+        resultado.motivo_nao_elegivel = (
+            f"dado insuficiente: {opcao['codigo']} sem data de coleta — "
+            "impossível saber se o dado ainda vale"
+        )
+        return resultado
+    if idade_opcao > limite_opcao:
+        resultado.motivo_nao_elegivel = (
+            f"dado insuficiente: dado de {opcao['codigo']} coletado há "
+            f"{idade_opcao:.1f}h, fora da janela de {limite_opcao:.0f}h"
+        )
         return resultado
 
     # 2. Dado de mercado insuficiente?
@@ -315,17 +372,58 @@ def avaliar(posicao: dict, opcao: dict, params: dict) -> ResultadoAvaliacao:
     valor_posicao_coberta = posicao["preco_mercado"] * ACOES_POR_CONTRATO
     premio_total = opcao["preco"] * ACOES_POR_CONTRATO
     premio_pct = (premio_total / valor_posicao_coberta * 100) if valor_posicao_coberta else 0.0
+
+    # O prêmio cresce com o prazo, e `premio_minimo_pct` não desconta isso:
+    # uma opção de 45 dias e uma de 10 disputam o MESMO limiar, o que
+    # favorece estruturalmente os vencimentos mais longos dentro da faixa
+    # permitida. Manter o limiar sobre o valor bruto é decisão registrada
+    # (mudá-la por conta própria alteraria quais sugestões saem), mas o
+    # número normalizado passa a aparecer no detalhe: o viés fica visível
+    # para quem revisa, em vez de embutido.
+    premio_pct_ao_mes = (premio_pct * 30 / dias_venc) if dias_venc > 0 else None
+    ao_mes = (
+        f", {premio_pct_ao_mes:.2f}%/mês em {dias_venc}d"
+        if premio_pct_ao_mes is not None else ""
+    )
     criterios.append(_criterio(
         "premio_pct", round(premio_pct, 4),
         f"{premio_pct:.2f}% (mínimo {params['premio_minimo_pct']}%, "
-        f"sobre preço de mercado {posicao['preco_mercado']})",
+        f"sobre preço de mercado {posicao['preco_mercado']}{ao_mes})",
         premio_pct >= params["premio_minimo_pct"],
     ))
 
+    # Critério OPCIONAL: só existe se o usuário configurar. Ausente, nada
+    # muda — é o que impede esta correção de virar mudança de postura de
+    # risco pelas costas de quem já usa o sistema.
+    minimo_ao_mes = params.get("premio_minimo_pct_ao_mes")
+    if minimo_ao_mes is not None:
+        criterios.append(_criterio(
+            "premio_pct_ao_mes",
+            round(premio_pct_ao_mes, 4) if premio_pct_ao_mes is not None else None,
+            (f"{premio_pct_ao_mes:.2f}%/mês (mínimo {minimo_ao_mes}%/mês)"
+             if premio_pct_ao_mes is not None
+             else f"não calculável com {dias_venc} dia(s) até o vencimento"),
+            premio_pct_ao_mes is not None and premio_pct_ao_mes >= minimo_ao_mes,
+        ))
+
     exposicao_pct = opcao["exposicao_pct_apos_operacao"]
+    # Quando o patrimônio a mercado está incompleto, o DENOMINADOR desta
+    # razão fica subestimado — e não só para o ticker sem cotação: para
+    # todas as posições da carteira, porque o denominador é um só. O efeito
+    # é conservador (a exposição parece maior do que é), mas conservador em
+    # silêncio ainda é um bloqueio sem explicação. O aviso viaja junto do
+    # número que ele distorce; antes existia só como log da execução, onde
+    # ninguém que lê o desfecho ia encontrar.
+    sem_cotacao = posicao.get("patrimonio_tickers_sem_cotacao") or ()
+    ressalva = (
+        f" — denominador parcial: sem cotação para {', '.join(sem_cotacao)}, "
+        "a exposição real é menor ou igual a esta"
+        if sem_cotacao else ""
+    )
     criterios.append(_criterio(
         "exposicao_pct_apos_operacao", exposicao_pct,
-        f"{exposicao_pct:.2f}% (limite {params['exposicao_maxima_pct_ativo']}%)",
+        f"{exposicao_pct:.2f}% (limite {params['exposicao_maxima_pct_ativo']}%"
+        f"{ressalva})",
         exposicao_pct <= params["exposicao_maxima_pct_ativo"],
     ))
 
@@ -427,8 +525,9 @@ def _opcoes_call_candidatas(
         (ticker_objeto,),
     )
     candidatas = []
-    hoje = dt.date.today()
-    for codigo, strike, vencimento, preco, delta, iv_rank, _coletado_em in cur.fetchall():
+    agora = dt.datetime.now(dt.timezone.utc)
+    hoje = agora.date()
+    for codigo, strike, vencimento, preco, delta, iv_rank, coletado_em in cur.fetchall():
         dias_vencimento = (vencimento - hoje).days if vencimento else None
         candidatas.append({
             "codigo": codigo, "tipo": "CALL", "strike": float(strike) if strike is not None else None,
@@ -437,6 +536,10 @@ def _opcoes_call_candidatas(
             "delta": float(delta) if delta is not None else None,
             "iv_rank": float(iv_rank) if iv_rank is not None else None,
             "dias_vencimento": dias_vencimento,
+            # A idade acompanha o dado até a avaliação: `DISTINCT ON` traz a
+            # linha mais RECENTE, o que não é o mesmo que recente.
+            "coletado_em": coletado_em.isoformat() if coletado_em else None,
+            "idade_horas": idade_em_horas(coletado_em, agora),
             # Vem do Earnings Event Service. `None` = não verificável, e o
             # critério de três estados decide o que fazer com isso conforme
             # `politica_resultado_desconhecido`.
@@ -524,7 +627,9 @@ def executar_avaliacao_carteira() -> list[ResultadoAvaliacao]:
         patrimonio = patrimonio_a_mercado(cur, params)
         if patrimonio.parcial:
             log.warning(
-                "Patrimônio a mercado incompleto: sem cotação utilizável para %s",
+                "Patrimônio a mercado incompleto: sem cotação utilizável para "
+                "%s — o denominador do critério de exposição fica subestimado "
+                "para TODAS as posições, não só para esses tickers",
                 ", ".join(patrimonio.tickers_sem_cotacao),
             )
 
@@ -541,6 +646,11 @@ def executar_avaliacao_carteira() -> list[ResultadoAvaliacao]:
                 cotacao.coletado_em.isoformat() if cotacao.coletado_em else None
             )
             posicao["motivo_sem_cotacao"] = None if cotacao.utilizavel else cotacao.motivo
+            # Viaja com a posição para o critério de exposição poder
+            # declarar que o denominador está incompleto.
+            posicao["patrimonio_tickers_sem_cotacao"] = (
+                tuple(patrimonio.tickers_sem_cotacao) if patrimonio.parcial else ()
+            )
 
             dias_resultado = _dias_para_resultado(
                 posicao["ticker"], hoje, risco_svc, repo_earnings
@@ -550,13 +660,24 @@ def executar_avaliacao_carteira() -> list[ResultadoAvaliacao]:
                 sem_opcoes.append(posicao["ticker"])
             cobertura = cobertura_disponivel_em_contratos(cur, posicao["ticker"])
             for opcao in candidatas:
-                notional = notional_descoberto(
-                    contratos=1,
-                    strike=opcao["strike"] or 0.0,
-                    cobertura_em_contratos=cobertura,
+                # Sem strike não se calcula notional. Antes era
+                # `strike or 0.0`, o que transformava dado ausente em
+                # exposição ZERO e fazia o critério passar — `None` aqui
+                # cai na checagem de campo obrigatório, que é onde a
+                # ausência tem que aparecer.
+                notional = (
+                    notional_descoberto(
+                        contratos=1,
+                        strike=opcao["strike"],
+                        cobertura_em_contratos=cobertura,
+                    )
+                    if opcao["strike"] is not None else None
                 )
-                opcao["exposicao_pct_apos_operacao"] = _exposicao_pct_apos_operacao(
-                    cur, posicao["ticker"], notional, patrimonio.total
+                opcao["exposicao_pct_apos_operacao"] = (
+                    _exposicao_pct_apos_operacao(
+                        cur, posicao["ticker"], notional, patrimonio.total
+                    )
+                    if notional is not None else None
                 )
                 resultado = avaliar(posicao, opcao, params)
                 resultados.append(resultado)

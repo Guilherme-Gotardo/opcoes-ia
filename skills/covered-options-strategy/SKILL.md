@@ -22,6 +22,17 @@ risco desejado (editar as constantes em `params.yaml`, não hardcode no código)
   cobrir sexta → segunda sem pregão). Sem ela não há como calcular prêmio
   mínimo nem exposição.
 
+- **Dado da opção fresco**: preço, delta e IV rank da opção também precisam
+  estar dentro de uma janela (`opcao_frescor_maximo_horas`, que herda a da
+  cotação quando não configurada). "Mais recente" não é o mesmo que
+  "recente": a consulta traz a última linha coletada, e ela pode ser de dias
+  atrás. Opção sem data de coleta é dado insuficiente — não saber a idade não
+  autoriza o uso.
+
+- **Strike registrado**: sem strike não há garantia a calcular no covered put
+  nem notional descoberto no covered call. Ausente, a avaliação para como
+  dado insuficiente; nunca é substituído por zero.
+
 Se o pré-requisito não for atendido, a posição é descartada antes mesmo de
 avaliar os critérios de mercado — não gerar sugestão nesse caso.
 
@@ -42,8 +53,33 @@ proíbe.
 | Delta do strike | entre 0.20 e 0.35 (em módulo) | Equilíbrio entre prêmio recebido e probabilidade de exercício |
 | Dias até o vencimento | entre 20 e 45 dias | Janela que maximiza o decaimento temporal (theta) por operação |
 | Prêmio mínimo | ≥ 0.5% do valor da posição coberta **a mercado** | Evita operações com retorno desprezível frente ao risco/custo |
+| Prêmio mínimo ao mês (opcional) | desligado por padrão (`premio_minimo_pct_ao_mes`) | Normaliza o prêmio pelo prazo; ver o viés abaixo |
 | Exposição máxima por ativo | ≤ 20% do patrimônio a mercado em opção **descoberta** | Limite de risco assumido sem cobertura |
 | Evento de resultado próximo | Nenhum resultado trimestral nos próximos 7 dias | Evita vender opção véspera de evento com risco de gap |
+
+### O limiar de prêmio não desconta o prazo
+
+`premio_minimo_pct` compara o percentual BRUTO. Uma opção de 45 dias e uma
+de 10 — ambas dentro da faixa permitida — disputam o mesmo mínimo, e o
+prêmio tende a crescer com o tempo: na prática isso favorece os vencimentos
+mais longos da faixa.
+
+Isso é escolha registrada, não descuido. Para o viés não ficar invisível, o
+detalhe do critério mostra o equivalente mensal ao lado do valor bruto. Quem
+quiser barrar por rendimento normalizado configura
+`premio_minimo_pct_ao_mes`, que entra como critério ADICIONAL — não
+substitui o bruto.
+
+### Exposição sobre patrimônio incompleto
+
+O denominador do critério de exposição é o patrimônio a mercado da carteira
+inteira — um só para todas as posições. Quando algum ticker fica sem cotação
+utilizável, esse denominador é subestimado e a exposição de **todas** as
+posições aparece maior do que é, não só a do ticker sem cotação.
+
+O efeito é conservador (bloqueia mais, nunca menos), mas conservador em
+silêncio é bloqueio sem explicação. Por isso o detalhe do critério declara
+que o denominador está parcial e nomeia os tickers que faltaram.
 
 ### O que "exposição máxima por ativo" limita — e o que não limita
 

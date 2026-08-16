@@ -28,10 +28,14 @@ POSICAO_COM_LOTE = {
     "preco_mercado": 42.0, "cotacao_em": "2026-08-15T12:00:00+00:00",
 }
 
+#: `idade_horas` é obrigatório desde 2026-08-16: o dado da opção passa pela
+#: mesma janela de frescor que a cotação da ação. Idade desconhecida é
+#: tratada como dado insuficiente, e não como "pode usar".
 OPCAO_CALL_BOA = {
     "codigo": "PETRJ380", "tipo": "CALL", "strike": 38.5, "vencimento": "2026-09-21",
     "preco": 0.85, "delta": 0.28, "iv_rank": 61.0, "dias_vencimento": 32,
     "exposicao_pct_apos_operacao": 12.0, "dias_para_resultado": 30,
+    "idade_horas": 2.0,
 }
 
 
@@ -261,3 +265,143 @@ def test_criterios_json_registra_a_base_de_valorizacao():
         "preco_mercado": 42.0,
         "cotacao_em": "2026-08-15T12:00:00+00:00",
     }
+
+
+# --- Achados da revisão de 2026-08-16 ---------------------------------------
+#
+# Cada teste abaixo fixa um defeito que quebrava a mesma garantia central:
+# campo ausente vira "dado insuficiente", nunca valor assumido nem exceção.
+
+OPCAO_PUT_BOA = dict(
+    OPCAO_CALL_BOA, codigo="PETRV380", tipo="PUT", delta=-0.28,
+)
+POSICAO_COM_CAIXA = dict(POSICAO_COM_LOTE, caixa_disponivel=10_000.0)
+
+
+def test_covered_put_com_strike_ausente_nao_estoura():
+    """Era TypeError: `strike * 100` rodava antes de qualquer checagem.
+
+    O ETL grava NULL em `strike` quando o provedor não devolve — o próprio
+    `_opcoes_call_candidatas` já previa isso —, então o caminho existia de
+    verdade e derrubava a avaliação inteira.
+    """
+    opcao = dict(OPCAO_PUT_BOA, strike=None)
+    resultado = avaliar(POSICAO_COM_CAIXA, opcao, PARAMS)
+    assert resultado.elegivel is False
+    assert "dado insuficiente" in resultado.motivo_nao_elegivel
+    assert "strike" in resultado.motivo_nao_elegivel
+
+
+def test_covered_put_sem_caixa_nao_calcula_garantia_antes_de_reclamar():
+    """A ordem importa: com strike válido e caixa ausente, o motivo tem que
+    ser o caixa — não um erro no cálculo que nem deveria ter acontecido."""
+    opcao = dict(OPCAO_PUT_BOA, strike=38.5)
+    posicao = dict(POSICAO_COM_LOTE)  # sem caixa_disponivel
+    resultado = avaliar(posicao, opcao, PARAMS)
+    assert resultado.elegivel is False
+    assert "caixa/garantia disponível não informado" in resultado.motivo_nao_elegivel
+
+
+def test_garantia_do_covered_put_usa_acoes_por_contrato():
+    """O 100 solto virou a constante. Caixa 1 centavo abaixo da garantia
+    reprova, e a mensagem cita o valor calculado com a constante."""
+    from src.market.valuation import ACOES_POR_CONTRATO
+
+    strike = 38.5
+    garantia = strike * ACOES_POR_CONTRATO
+    opcao = dict(OPCAO_PUT_BOA, strike=strike)
+    posicao = dict(POSICAO_COM_LOTE, caixa_disponivel=garantia - 0.01)
+
+    resultado = avaliar(posicao, opcao, PARAMS)
+    assert resultado.elegivel is False
+    assert "caixa insuficiente" in resultado.motivo_nao_elegivel
+    assert str(garantia) in resultado.motivo_nao_elegivel
+
+
+def test_lote_do_covered_call_usa_acoes_por_contrato():
+    from src.market.valuation import ACOES_POR_CONTRATO
+
+    posicao = dict(POSICAO_COM_LOTE, quantidade=ACOES_POR_CONTRATO - 1)
+    resultado = avaliar(posicao, OPCAO_CALL_BOA, PARAMS)
+    assert resultado.elegivel is False
+    assert str(ACOES_POR_CONTRATO) in resultado.motivo_nao_elegivel
+
+
+def test_strike_ausente_no_covered_call_e_dado_insuficiente():
+    """Antes o orquestrador fazia `strike or 0.0`: notional zero, exposição
+    zero, critério de exposição APROVADO. Um dado faltando aprovava o
+    critério que deveria barrar."""
+    opcao = dict(OPCAO_CALL_BOA, strike=None)
+    resultado = avaliar(POSICAO_COM_LOTE, opcao, PARAMS)
+    assert resultado.elegivel is False
+    assert "strike" in resultado.motivo_nao_elegivel
+
+
+def test_dado_de_opcao_fora_da_janela_de_frescor_e_recusado():
+    """A janela valia só para a cotação da ação; delta e IV rank de dias
+    atrás entravam como se fossem de agora."""
+    opcao = dict(OPCAO_CALL_BOA, idade_horas=100.0)
+    resultado = avaliar(POSICAO_COM_LOTE, opcao, dict(PARAMS))
+    assert resultado.elegivel is False
+    assert "fora da janela" in resultado.motivo_nao_elegivel
+    assert "100.0h" in resultado.motivo_nao_elegivel
+
+
+def test_opcao_sem_data_de_coleta_e_dado_insuficiente():
+    opcao = dict(OPCAO_CALL_BOA, idade_horas=None)
+    resultado = avaliar(POSICAO_COM_LOTE, opcao, PARAMS)
+    assert resultado.elegivel is False
+    assert "sem data de coleta" in resultado.motivo_nao_elegivel
+
+
+def test_janela_da_opcao_pode_ser_mais_curta_que_a_da_cotacao():
+    """O parâmetro próprio existe para apertar a opção sem apertar a ação."""
+    params = dict(PARAMS, cotacao_frescor_maximo_horas=72,
+                  opcao_frescor_maximo_horas=4)
+    opcao = dict(OPCAO_CALL_BOA, idade_horas=10.0)
+    resultado = avaliar(POSICAO_COM_LOTE, opcao, params)
+    assert resultado.elegivel is False
+    assert "janela de 4h" in resultado.motivo_nao_elegivel
+
+
+def test_premio_ao_mes_aparece_no_detalhe_sem_mudar_o_criterio():
+    """O viés de prazo fica visível; o limiar segue sobre o valor bruto."""
+    resultado = avaliar(POSICAO_COM_LOTE, OPCAO_CALL_BOA, PARAMS)
+    premio = next(c for c in resultado.criterios if c.nome == "premio_pct")
+    assert "%/mês" in premio.detalhe
+    assert premio.aprovado is True
+    assert not any(c.nome == "premio_pct_ao_mes" for c in resultado.criterios)
+
+
+def test_criterio_de_premio_ao_mes_so_existe_se_configurado():
+    """Opção de 45 dias com prêmio que passa no bruto e falha no mensal."""
+    params = dict(PARAMS, premio_minimo_pct=0.5, premio_minimo_pct_ao_mes=2.0)
+    opcao = dict(OPCAO_CALL_BOA, dias_vencimento=45)
+    resultado = avaliar(POSICAO_COM_LOTE, opcao, params)
+
+    bruto = next(c for c in resultado.criterios if c.nome == "premio_pct")
+    mensal = next(c for c in resultado.criterios if c.nome == "premio_pct_ao_mes")
+    assert bruto.aprovado is True, "o critério bruto continua passando"
+    assert mensal.aprovado is False, "o normalizado por prazo reprova"
+    assert resultado.elegivel is False
+
+
+def test_denominador_parcial_e_declarado_no_criterio_de_exposicao():
+    """Era só log.warning: quem lê o desfecho não via que a exposição estava
+    inflada por um patrimônio incompleto."""
+    posicao = dict(POSICAO_COM_LOTE,
+                   patrimonio_tickers_sem_cotacao=("ABEV3", "BBAS3"))
+    resultado = avaliar(posicao, OPCAO_CALL_BOA, PARAMS)
+    exposicao = next(
+        c for c in resultado.criterios if c.nome == "exposicao_pct_apos_operacao"
+    )
+    assert "denominador parcial" in exposicao.detalhe
+    assert "ABEV3" in exposicao.detalhe and "BBAS3" in exposicao.detalhe
+
+
+def test_sem_patrimonio_parcial_o_detalhe_fica_limpo():
+    resultado = avaliar(POSICAO_COM_LOTE, OPCAO_CALL_BOA, PARAMS)
+    exposicao = next(
+        c for c in resultado.criterios if c.nome == "exposicao_pct_apos_operacao"
+    )
+    assert "denominador parcial" not in exposicao.detalhe

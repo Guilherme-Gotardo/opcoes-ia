@@ -7,6 +7,17 @@ delta_max: 0.35
 dias_vencimento_min: 20
 dias_vencimento_max: 45
 premio_minimo_pct: 0.5        # % do valor da posição coberta
+
+# ATENÇÃO — este limiar NÃO desconta o prazo. Uma opção de 45 dias e uma de
+# 10 disputam o mesmo mínimo, e o prêmio tende a crescer com o tempo: na
+# prática isso favorece os vencimentos mais longos da faixa permitida. É
+# escolha registrada, não esquecimento. O relatório mostra o equivalente
+# mensal ao lado do valor bruto para o viés ficar visível.
+#
+# Para barrar por rendimento normalizado, descomente abaixo: vira um
+# critério ADICIONAL (não substitui `premio_minimo_pct`). Ausente, nada
+# muda — mexer na postura de risco tem que ser ato deliberado.
+# premio_minimo_pct_ao_mes: 1.5
 exposicao_maxima_pct_ativo: 20 # % do patrimônio (a mercado) em opção DESCOBERTA por ativo
 dias_bloqueio_antes_resultado: 7
 
@@ -17,6 +28,13 @@ dias_bloqueio_antes_resultado: 7
 # insuficiente" com o ticker e a idade no relatório, em vez de decidir sobre
 # preço de custo. Valor inválido falha alto, nunca cai no padrão em silêncio.
 cotacao_frescor_maximo_horas: 72
+
+# Idade máxima do DADO DA OPÇÃO (preço, delta, IV rank) para entrar num
+# critério. Chave própria porque as duas grandezas envelhecem diferente: o
+# preço da ação sobrevive a um fim de semana, mas delta e IV rank mudam com
+# o tempo até o vencimento mesmo sem negócio novo. Omitido, herda a janela
+# da cotação acima.
+# opcao_frescor_maximo_horas: 24
 
 # O que fazer quando NÃO existe data de resultado confiável para o ativo:
 #   bloquear  (padrão) não emite sugestão, mas o relatório explica que o
