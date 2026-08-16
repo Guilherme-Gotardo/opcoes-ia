@@ -68,9 +68,15 @@ agente de análise, por exemplo, tenha acesso a `Bash` irrestrito sem motivo.
 
 ## Decisões em aberto (revisitar conforme o projeto evolui)
 
-- **Banco gerenciado para o Actions**: `docker-compose` cobre o ambiente local,
-  mas o workflow de GitHub Actions precisa de um Postgres acessível pela
-  internet (Supabase, Neon, RDS). Ainda não decidido qual.
+- ~~**Banco gerenciado para o Actions**...~~ **Resolvido**: Postgres no Neon
+  (`sa-east-1`, free tier), fonte da verdade da carteira. O `docker-compose`
+  passou a ser banco descartável de teste. Schema aplicado por
+  `python -m src.db.bootstrap`; ver `docs/RUNBOOK-POSTGRES.md`.
+- **Desfecho da avaliação é persistido** (`desfecho_avaliacao`): o motivo de
+  cada não-sugestão sobrevive ao processo, agregado por (execução, ativo,
+  motivo). É a fonte da seção "Avaliações sem sugestão" do relatório e será
+  a da interface — sem isso, "nenhuma sugestão hoje" fica indistinguível de
+  "nada valia a pena".
 - ~~**Dashboard**: não há UI ainda...~~ **Resolvido**: a primeira versão é o
   relatório Markdown estático gerado por `src/report/daily.py`
   (`reports/<AAAA-MM-DD>.md`, um arquivo por dia). Um dashboard interativo

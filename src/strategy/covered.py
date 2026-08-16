@@ -499,10 +499,22 @@ def executar_avaliacao_carteira() -> list[ResultadoAvaliacao]:
     passarem em todos os critérios. Retorna todos os resultados avaliados
     (inclusive os não elegíveis), para o relatório diário poder explicar
     o motivo de cada não-sugestão."""
+    # Import adiado para quebrar o ciclo: `outcome` consome os tipos daqui
+    # (`ResultadoAvaliacao`, `EstadoCriterio`), e no topo o import circular
+    # falharia — `outcome` executaria antes de `EstadoCriterio` existir.
+    # A direção certa da dependência é esta (covered produz, outcome agrega);
+    # a correção estrutural é extrair os modelos para um módulo próprio, e
+    # está anotada como dívida, não feita aqui para manter o diff no escopo.
+    from src.strategy.outcome import agregar, resumo_por_motivo  # noqa: PLC0415
+    from src.strategy.outcome_repository import gravar as gravar_desfecho  # noqa: PLC0415
+
     params = carregar_params()
     politica_resultado_desconhecido(params)  # valida cedo, antes de qualquer I/O
     resultados: list[ResultadoAvaliacao] = []
-    hoje = dt.datetime.now(dt.timezone.utc).date()
+    # Um timestamp para a execução inteira: é o que agrupa o desfecho e o que
+    # distingue duas rodadas no mesmo dia.
+    executado_em = dt.datetime.now(dt.timezone.utc)
+    hoje = executado_em.date()
     risco_svc = EarningsRiskService()
     repo_earnings = EarningsEventRepository()
 
@@ -517,6 +529,10 @@ def executar_avaliacao_carteira() -> list[ResultadoAvaliacao]:
             )
 
         posicoes = _posicoes_acao_abertas(cur)
+        #: Ativos que nem chegaram a ser avaliados por não haver opção
+        #: coletada. Sem registrá-los, "nada a avaliar" sumiria do desfecho e
+        #: viraria indistinguível de "ativo fora da carteira".
+        sem_opcoes: list[str] = []
         for posicao in posicoes:
             # Uma consulta de cotação por POSIÇÃO, não por par posição×opção.
             cotacao = cotacao_vigente(cur, posicao["ticker"], params)
@@ -530,6 +546,8 @@ def executar_avaliacao_carteira() -> list[ResultadoAvaliacao]:
                 posicao["ticker"], hoje, risco_svc, repo_earnings
             )
             candidatas = _opcoes_call_candidatas(cur, posicao["ticker"], dias_resultado)
+            if not candidatas:
+                sem_opcoes.append(posicao["ticker"])
             cobertura = cobertura_disponivel_em_contratos(cur, posicao["ticker"])
             for opcao in candidatas:
                 notional = notional_descoberto(
@@ -549,10 +567,16 @@ def executar_avaliacao_carteira() -> list[ResultadoAvaliacao]:
                         resultado.ticker_objeto, resultado.codigo_opcao,
                         resultado.strike, resultado.vencimento,
                     )
+        # O desfecho vai na MESMA transação das sugestões: uma execução que
+        # gravasse sugestões e falhasse aqui deixaria a interface mostrando
+        # sugestões sem saber o que mais aconteceu.
+        linhas_desfecho = agregar(resultados, tickers_sem_opcoes=sem_opcoes)
+        gravar_desfecho(cur, executado_em, linhas_desfecho)
         conn.commit()
 
     n_sugeridas = sum(1 for r in resultados if r.elegivel)
     n_bloqueadas = sum(1 for r in resultados if r.bloqueado_por_resultado)
+    log.info("Desfecho registrado: %s", dict(resumo_por_motivo(linhas_desfecho)))
     log.info(
         "Avaliação concluída: %d posição(ões) x opção(ões) avaliadas, "
         "%d sugestão(ões) gerada(s), %d bloqueada(s) por data de resultado.",

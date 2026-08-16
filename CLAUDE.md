@@ -82,6 +82,12 @@ docker compose up -d db
   o usuário afirma) → `ingest.py` (o que promove aquilo para
   `earnings_events`). Duas regras que atravessam tudo: estimativa nunca
   sobrescreve confirmação, e registrar não é consolidar
+- Pedido sobre **por que não saiu sugestão** → `src/strategy/outcome.py`
+  (classificação e agregação) e `outcome_repository.py` (tabela
+  `desfecho_avaliacao`). Registro agregado por (execução, ativo, motivo) —
+  não uma linha por opção, porque o bloqueio por data de resultado é por
+  ativo. Atenção: a contagem por critério **pode somar mais que o total**,
+  já que uma opção reprovada em dois critérios conta nos dois
 - Pedido sobre **valor de posição / patrimônio / exposição** →
   `src/market/valuation.py`. É o único lugar que traduz `cotacoes` em valor;
   `report/daily.py` e `strategy/covered.py` consomem de lá. Regra que
@@ -181,6 +187,18 @@ docker compose up -d db
       fontes reais em 2026-08-15: a CVM devolveu 4/5 divulgações do 2T26
       (BBAS3 fora por causa da latência do dump) e o Yahoo 3/5 datas
       futuras — exatamente o que a investigação previu
+- [x] **Motivo de cada não-sugestão é persistido** (`desfecho_avaliacao`,
+      migração 003). Antes, só as sugestões elegíveis iam para `sugestoes`;
+      bloqueio por data de resultado, reprovação em critério, dado
+      insuficiente e pré-requisito viviam em memória e morriam com o
+      processo — o relatório só enxergava porque recebia por argumento, no
+      mesmo processo. Agora o relatório lê do banco quando `avaliacoes` não
+      é informado, e a seção cobre **todos** os motivos, não só earnings.
+      Isso destrava a interface: "nenhuma sugestão hoje" deixa de ser
+      silêncio. Dívida conhecida: `covered.py` importa `outcome.py` de forma
+      adiada dentro da função para quebrar um ciclo de import — a correção
+      é extrair `ResultadoAvaliacao`/`EstadoCriterio` para um módulo de
+      modelos
 - [x] **Cadastro de ativos implementado** (`src/assets/manage.py`).
       `ativos` é a entidade de referência — `cotacoes.ticker`,
       `opcoes.ticker_objeto` e `noticias.ticker` têm FK para ela — e até

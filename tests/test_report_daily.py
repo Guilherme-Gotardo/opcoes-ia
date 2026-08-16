@@ -355,3 +355,104 @@ def test_sugestao_sinalizada_exibe_aviso_de_agenda(tmp_path):
     assert "agenda de resultados NÃO verificada" in texto
     assert "Pendente de revisão humana" in texto, "o aviso soma, não substitui"
     assert "dias_para_resultado: não verificável ⚠️" in texto
+
+
+# --- Seção de não-sugestões vinda do desfecho persistido --------------------
+
+def _desfecho(motivo, ticker="PETR4", quantidade=8, contagem=None, amostra=None):
+    from src.strategy.outcome import LinhaDesfecho
+    return LinhaDesfecho(
+        ticker_objeto=ticker, motivo=motivo, quantidade=quantidade,
+        criterios_contagem=contagem or {}, amostra=amostra,
+    )
+
+
+def test_relatorio_sem_argumento_monta_secao_a_partir_do_banco(tmp_path):
+    """O ponto da change: o relatório deixa de depender de ter rodado no
+    mesmo processo que avaliou."""
+    fake_conn = _FakeConnection(_FakeCursor(_dispatcher([], {}, {}, [])))
+    desfecho = [_desfecho("criterio_reprovado", contagem={"iv_rank": 8})]
+
+    with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
+         patch("src.report.daily.get_settings", _settings_configurado), \
+         patch("src.report.daily.ultima_execucao_do_dia", return_value=desfecho), \
+         patch.object(daily, "REPORTS_DIR", tmp_path):
+        conteudo = daily.gerar_relatorio(dt.date(2026, 8, 16)).read_text(encoding="utf-8")
+
+    assert "## Avaliações sem sugestão" in conteudo
+    assert "PETR4 — 8 opção(ões) reprovadas em critério de mercado" in conteudo
+    assert "iv_rank: 8 opção(ões)" in conteudo
+
+
+def test_motivo_alem_de_earnings_aparece(tmp_path):
+    """Antes, só bloqueio por data de resultado era reportado."""
+    fake_conn = _FakeConnection(_FakeCursor(_dispatcher([], {}, {}, [])))
+    desfecho = [
+        _desfecho("dado_insuficiente", ticker="VALE3", quantidade=3),
+        _desfecho("sem_opcoes", ticker="ITUB4", quantidade=0),
+    ]
+    with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
+         patch("src.report.daily.get_settings", _settings_configurado), \
+         patch("src.report.daily.ultima_execucao_do_dia", return_value=desfecho), \
+         patch.object(daily, "REPORTS_DIR", tmp_path):
+        conteudo = daily.gerar_relatorio(dt.date(2026, 8, 16)).read_text(encoding="utf-8")
+
+    assert "VALE3 — 3 opção(ões) não avaliadas por falta de dado" in conteudo
+    assert "Não é reprovação" in conteudo, "faltar dado ≠ reprovar"
+    assert "ITUB4 — 0 opção(ões) sem opções para avaliar" in conteudo
+
+
+def test_bloqueio_por_earnings_no_desfecho_traz_os_dois_passos(tmp_path):
+    fake_conn = _FakeConnection(_FakeCursor(_dispatcher([], {}, {}, [])))
+    desfecho = [_desfecho("bloqueio_data_resultado", quantidade=12)]
+    with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
+         patch("src.report.daily.get_settings", _settings_configurado), \
+         patch("src.report.daily.ultima_execucao_do_dia", return_value=desfecho), \
+         patch.object(daily, "REPORTS_DIR", tmp_path):
+        conteudo = daily.gerar_relatorio(dt.date(2026, 8, 16)).read_text(encoding="utf-8")
+
+    assert "src.earnings.manage add PETR4" in conteudo
+    assert "src.earnings.ingest --tickers PETR4" in conteudo
+    assert "registrar não é consolidar" in conteudo
+
+
+def test_amostra_do_desfecho_aparece_com_os_criterios(tmp_path):
+    fake_conn = _FakeConnection(_FakeCursor(_dispatcher([], {}, {}, [])))
+    amostra = {
+        "codigo_opcao": "PETRI450", "strike": 45.0, "vencimento": "2026-09-17",
+        "premio_estimado": 0.85,
+        "criterios": [{"nome": "iv_rank", "detalhe": "42 (mínimo 50)", "estado": "reprovado"}],
+    }
+    desfecho = [_desfecho("criterio_reprovado", amostra=amostra)]
+    with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
+         patch("src.report.daily.get_settings", _settings_configurado), \
+         patch("src.report.daily.ultima_execucao_do_dia", return_value=desfecho), \
+         patch.object(daily, "REPORTS_DIR", tmp_path):
+        conteudo = daily.gerar_relatorio(dt.date(2026, 8, 16)).read_text(encoding="utf-8")
+
+    assert "Exemplo — PETRI450" in conteudo
+    assert "iv_rank: 42 (mínimo 50) ❌" in conteudo
+
+
+def test_sugerida_nao_aparece_na_secao_de_nao_sugestoes(tmp_path):
+    fake_conn = _FakeConnection(_FakeCursor(_dispatcher([], {}, {}, [])))
+    with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
+         patch("src.report.daily.get_settings", _settings_configurado), \
+         patch("src.report.daily.ultima_execucao_do_dia",
+               return_value=[_desfecho("sugerida", quantidade=1)]), \
+         patch.object(daily, "REPORTS_DIR", tmp_path):
+        conteudo = daily.gerar_relatorio(dt.date(2026, 8, 16)).read_text(encoding="utf-8")
+
+    assert "## Avaliações sem sugestão" not in conteudo, "seção vazia não é gerada"
+
+
+def test_desfecho_nao_e_consultado_quando_avaliacoes_e_informado(tmp_path):
+    """O argumento continua tendo precedência — não somamos as duas fontes."""
+    fake_conn = _FakeConnection(_FakeCursor(_dispatcher([], {}, {}, [])))
+    with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
+         patch("src.report.daily.get_settings", _settings_configurado), \
+         patch("src.report.daily.ultima_execucao_do_dia") as mock_consulta, \
+         patch.object(daily, "REPORTS_DIR", tmp_path):
+        daily.gerar_relatorio(dt.date(2026, 8, 16), avaliacoes=[])
+
+    mock_consulta.assert_not_called()

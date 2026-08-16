@@ -14,6 +14,7 @@ from pathlib import Path
 from src.config import get_settings
 from src.db.connection import get_connection
 from src.market.valuation import carregar_params, cotacao_vigente
+from src.strategy.outcome_repository import ultima_execucao_do_dia
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -203,6 +204,92 @@ def _sugestoes_do_dia(cur, data: dt.date) -> list[dict]:
     return sugestoes
 
 
+#: Como cada motivo do desfecho aparece no relatório.
+_ROTULO_MOTIVO = {
+    "bloqueio_data_resultado": (
+        "bloqueadas por data de resultado não verificável",
+        "Passaram nos critérios de mercado, mas não há data de divulgação "
+        "confiável para o ativo.",
+    ),
+    "criterio_reprovado": (
+        "reprovadas em critério de mercado",
+        "Avaliadas contra valores reais e não atenderam ao critério — "
+        "diferente de faltar dado.",
+    ),
+    "dado_insuficiente": (
+        "não avaliadas por falta de dado",
+        "Faltou dado para avaliar. Não é reprovação: não sabemos se "
+        "passariam.",
+    ),
+    "pre_requisito": (
+        "descartadas por pré-requisito",
+        "Lote ou caixa insuficiente para a operação, antes dos critérios de "
+        "mercado.",
+    ),
+    "sem_opcoes": (
+        "sem opções para avaliar",
+        "Nenhuma opção coletada para o ativo — nada a avaliar, o que é "
+        "diferente de avaliar e nada passar.",
+    ),
+}
+
+
+def _renderizar_desfecho(linhas: list[str], desfecho: list) -> None:
+    """Seção das avaliações que não geraram sugestão, a partir do desfecho
+    persistido.
+
+    Existe porque "nenhuma sugestão hoje" sem explicação é indistinguível de
+    "nada valia a pena" — e as duas coisas exigem ações opostas. Diferente da
+    versão anterior, cobre TODOS os motivos, não só data de resultado, e lê
+    do banco em vez de depender de ter rodado no mesmo processo.
+    """
+    nao_sugeridas = [l for l in desfecho if l.motivo != "sugerida"]
+    if not nao_sugeridas:
+        return
+
+    linhas.append("## Avaliações sem sugestão")
+    linhas.append("")
+    for l in sorted(nao_sugeridas, key=lambda x: (x.ticker_objeto, x.motivo)):
+        rotulo, explicacao = _ROTULO_MOTIVO.get(
+            l.motivo, (l.motivo, "")
+        )
+        linhas.append(f"### {l.ticker_objeto} — {l.quantidade} opção(ões) {rotulo}")
+        if explicacao:
+            linhas.append(explicacao)
+
+        if l.criterios_contagem:
+            linhas.append("")
+            linhas.append("Critérios que barraram (uma opção pode contar em mais de um):")
+            for nome, n in sorted(l.criterios_contagem.items(), key=lambda kv: -kv[1]):
+                linhas.append(f"  - {nome}: {n} opção(ões)")
+
+        amostra = l.amostra or {}
+        if amostra.get("codigo_opcao"):
+            linhas.append("")
+            linhas.append(
+                f"Exemplo — {amostra['codigo_opcao']} | strike {amostra.get('strike')} "
+                f"| vencimento {amostra.get('vencimento')} "
+                f"| prêmio {amostra.get('premio_estimado')}"
+            )
+            for c in amostra.get("criterios", []):
+                estado = c.get("estado")
+                marca = "⚠️" if estado == "indisponivel" else ("✅" if estado == "aprovado" else "❌")
+                linhas.append(f"  - {c.get('nome')}: {c.get('detalhe')} {marca}")
+
+        if l.motivo == "bloqueio_data_resultado":
+            linhas.append("")
+            linhas.append("  → destrave com os dois passos:")
+            linhas.append(
+                f"     1. `python -m src.earnings.manage add {l.ticker_objeto} "
+                "AAAA-MM-DD --sessao AFTER_CLOSE --origem <url do RI>`"
+            )
+            linhas.append(
+                f"     2. `python -m src.earnings.ingest --tickers {l.ticker_objeto}`"
+                "  (registrar não é consolidar)"
+            )
+        linhas.append("")
+
+
 def _renderizar_bloqueios(linhas: list[str], bloqueios: list) -> None:
     """Seção das avaliações barradas por data de resultado não verificável.
 
@@ -254,7 +341,7 @@ def _renderizar_bloqueios(linhas: list[str], bloqueios: list) -> None:
 
 def _renderizar_markdown(
     data: dt.date, resumo: dict, alertas: list[str], sugestoes: list[dict],
-    bloqueios: list | None = None,
+    bloqueios: list | None = None, desfecho: list | None = None,
 ) -> str:
     linhas = [f"# Relatório diário — {data.isoformat()}", ""]
 
@@ -312,6 +399,7 @@ def _renderizar_markdown(
     linhas.append("")
 
     _renderizar_bloqueios(linhas, bloqueios or [])
+    _renderizar_desfecho(linhas, desfecho or [])
 
     linhas.append("## Sugestões")
     if not sugestoes:
@@ -361,13 +449,20 @@ def gerar_relatorio(
         alertas = _alertas(cur, resumo["posicoes"], data)
         sugestoes = _sugestoes_do_dia(cur, data)
 
-    # `avaliacoes` vem de `executar_avaliacao_carteira()`, que já retorna
-    # todos os resultados — inclusive os não elegíveis. Reaproveitamos em
-    # vez de reavaliar. Sem esse argumento o relatório segue funcionando,
-    # só não mostra a seção de bloqueios.
+    # Duas fontes para a seção de não-sugestões, nesta ordem:
+    #
+    # 1. `avaliacoes`, quando informado — vem de
+    #    `executar_avaliacao_carteira()` no MESMO processo. Continua aceito
+    #    para não quebrar quem já chama assim.
+    # 2. O desfecho persistido da execução mais recente do dia. É o que
+    #    permite gerar relatório num processo separado, e o que garante que
+    #    relatório e interface leiam a mesma coisa.
     bloqueios = [a for a in (avaliacoes or []) if a.bloqueado_por_resultado]
+    desfecho = [] if avaliacoes is not None else ultima_execucao_do_dia(data)
 
-    conteudo = _renderizar_markdown(data, resumo, alertas, sugestoes, bloqueios)
+    conteudo = _renderizar_markdown(
+        data, resumo, alertas, sugestoes, bloqueios, desfecho
+    )
     caminho.write_text(conteudo, encoding="utf-8")
     log.info("Relatório gerado: %s", caminho)
     return caminho

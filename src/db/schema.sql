@@ -184,3 +184,31 @@ CREATE TABLE IF NOT EXISTS earnings_manual_entries (
 
 CREATE INDEX IF NOT EXISTS idx_earnings_manual_ticker
     ON earnings_manual_entries (ticker, data_resultado);
+
+-- Desfecho de cada execução da avaliação de estratégia.
+-- Criado originalmente pela migração 003_desfecho_avaliacao.sql; replicado
+-- aqui para que um banco novo saia idêntico a um migrado (ver
+-- src/db/migrations/README.md). O raciocínio completo está na migração.
+--
+-- Existe porque só as sugestões elegíveis iam para `sugestoes`: o motivo de
+-- cada NÃO-sugestão morria com o processo, e "nenhuma sugestão hoje" ficava
+-- indistinguível de "nada valia a pena". Agregado por (execução, ativo,
+-- motivo) porque o bloqueio por data de resultado é por ativo — uma linha
+-- por opção gravaria centenas de registros para um fato só.
+CREATE TABLE IF NOT EXISTS desfecho_avaliacao (
+    id                  BIGSERIAL PRIMARY KEY,
+    executado_em        TIMESTAMPTZ NOT NULL,   -- agrupa as linhas de uma execução
+    ticker_objeto       VARCHAR(12) NOT NULL REFERENCES ativos(ticker),
+    motivo              VARCHAR(30) NOT NULL,   -- código fechado, não texto livre
+    quantidade          INTEGER NOT NULL,       -- opções que caíram neste motivo
+    -- Contagem por critério reprovado. A soma PODE EXCEDER `quantidade`:
+    -- opção reprovada em dois critérios conta nos dois.
+    criterios_contagem  JSONB,
+    amostra             JSONB,                  -- amostra para leitura, não para operar
+    criado_em           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_desfecho_execucao
+    ON desfecho_avaliacao (executado_em DESC);
+CREATE INDEX IF NOT EXISTS idx_desfecho_ticker_motivo
+    ON desfecho_avaliacao (ticker_objeto, motivo, executado_em DESC);
