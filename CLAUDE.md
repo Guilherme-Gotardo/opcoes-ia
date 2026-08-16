@@ -56,6 +56,10 @@ docker compose up -d db
   provedor) → `resolution.py` (conflitos) → `risk.py` (o que o motor de
   opções consome). Regra que atravessa tudo: estimativa nunca sobrescreve
   confirmação
+- Pedido sobre **valor de posição / patrimônio / exposição** →
+  `src/market/valuation.py`. É o único lugar que traduz `cotacoes` em valor;
+  `report/daily.py` e `strategy/covered.py` consomem de lá. Regra que
+  atravessa tudo: `preco_medio` é custo e nunca vira valor de mercado
 - Pedido sobre **novo agente** → `.claude/agents/`, use `orchestrator.md` como
   referência de como os agentes se conectam
 - Pedido sobre **automação diária** → `.github/workflows/daily-etl.yml`
@@ -150,26 +154,25 @@ docker compose up -d db
       em 2026-08-15 com opção sintética (`fonte='sintetico'`): sem data
       registrada o relatório mostra o bloqueio; com data registrada o
       sistema emitiu a primeira sugestão da sua história**
-- [ ] **`exposicao_maxima_pct_ativo` inviabiliza covered call em carteira
-      pequena.** `_exposicao_pct_apos_operacao` conta o notional cheio
-      (`strike × 100`) como exposição nova, mas numa covered call esse
-      notional já está coberto pelas ações em carteira — é contagem dupla.
-      Com patrimônio de R$ 14.250 e limite de 20%, o strike máximo que
-      passa é R$ 28,50, enquanto PETR4 negocia a R$ 42: nenhuma covered
-      call do ativo pode passar. Precisa decidir se a exposição de uma
-      operação coberta deve contar como notional, como prêmio, ou como
-      zero
+- [x] **Carteira valorizada a preço de mercado e exposição só da parte
+      descoberta** (`src/market/valuation.py`, o único lugar que traduz
+      `cotacoes` em valor). `exposicao_maxima_pct_ativo` passou a medir
+      opção **descoberta** por ativo: o notional da operação menos a
+      cobertura já em carteira (ações para call, caixa para put), com piso
+      em zero — covered call totalmente coberta adiciona zero. O denominador
+      é o patrimônio a mercado, só de posições em ação. Sem cotação dentro
+      de `cotacao_frescor_maximo_horas` (padrão 72h) a avaliação para como
+      "dado insuficiente" nomeando ticker e idade; **não existe fallback
+      para `preco_medio`**
 - [ ] Não há, ainda, forma de registrar caixa/garantia disponível — covered
       put não é avaliado automaticamente contra a carteira real por isso
-- [ ] **`report/daily.py` nunca lê preço de mercado.** `cotacoes` só é
-      consultada em `_ultima_coleta` (frescor); `_resumo_carteira` valoriza
-      tudo por `preco_medio` (custo de entrada). No teste de fluxo de
-      2026-08-15 o relatório mostrou R$ 14.250 contra R$ 18.469 a mercado
-      (~30% abaixo). Consequência: hoje o `fetch_quotes` é o único passo
-      com dado real e não influencia nenhuma saída além de suprimir um
-      alerta. Mesmo problema em `_exposicao_pct_apos_operacao`
-      (`strategy/covered.py`), que roda o critério de risco
-      `exposicao_maxima_pct_ativo` sobre custo, não sobre mercado
+- [ ] **Concentração da carteira não é barrada por nenhum critério** — e
+      isso é deliberado. `exposicao_maxima_pct_ativo` limita opção
+      descoberta, não o quanto do patrimônio está num único ativo. Quem
+      mostra concentração é a seção "Exposição por ativo-objeto" do
+      relatório diário (agora a mercado), para decisão humana. Se um dia
+      um teto de concentração for desejado, é critério novo, não
+      reinterpretação deste
 - [ ] **`executar_avaliacao_carteira()` não consegue emitir sugestão nem
       com dados de opções perfeitos**: `_opcoes_call_candidatas` fixa
       `dias_para_resultado = None` (gap do calendário de resultados), e

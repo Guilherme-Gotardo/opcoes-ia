@@ -7,8 +7,16 @@ delta_max: 0.35
 dias_vencimento_min: 20
 dias_vencimento_max: 45
 premio_minimo_pct: 0.5        # % do valor da posição coberta
-exposicao_maxima_pct_ativo: 20 # % do patrimônio total em opções por ativo
+exposicao_maxima_pct_ativo: 20 # % do patrimônio (a mercado) em opção DESCOBERTA por ativo
 dias_bloqueio_antes_resultado: 7
+
+# Idade máxima aceitável da última cotação para ela valer como preço de
+# mercado numa decisão. 72h cobre sexta-fechamento → segunda-abertura sem
+# cotação nova, que é ausência de pregão, não dado velho. Feriado prolongado
+# estoura a janela — e parar nesse caso é o certo: a avaliação vira "dado
+# insuficiente" com o ticker e a idade no relatório, em vez de decidir sobre
+# preço de custo. Valor inválido falha alto, nunca cai no padrão em silêncio.
+cotacao_frescor_maximo_horas: 72
 
 # O que fazer quando NÃO existe data de resultado confiável para o ativo:
 #   bloquear  (padrão) não emite sugestão, mas o relatório explica que o

@@ -2,6 +2,7 @@
 critérios da skill covered-options-strategy sem precisar de banco."""
 import pytest
 
+from src.strategy import covered
 from src.strategy.covered import (
     EstadoCriterio,
     PoliticaInvalida,
@@ -19,7 +20,13 @@ PARAMS = {
     "dias_bloqueio_antes_resultado": 7,
 }
 
-POSICAO_COM_LOTE = {"ticker": "PETR4", "quantidade": 100, "preco_medio": 38.0}
+#: `preco_medio` (custo) e `preco_mercado` são deliberadamente diferentes em
+#: todas as fixtures: se algum critério voltar a usar custo, algum teste
+#: quebra em vez de passar por coincidência.
+POSICAO_COM_LOTE = {
+    "ticker": "PETR4", "quantidade": 100, "preco_medio": 38.0,
+    "preco_mercado": 42.0, "cotacao_em": "2026-08-15T12:00:00+00:00",
+}
 
 OPCAO_CALL_BOA = {
     "codigo": "PETRJ380", "tipo": "CALL", "strike": 38.5, "vencimento": "2026-09-21",
@@ -46,7 +53,7 @@ def test_avaliar_nao_gera_sugestao_quando_iv_rank_abaixo_do_minimo():
 
 
 def test_avaliar_descarta_por_lote_insuficiente_sem_checar_criterios_mercado():
-    posicao_sem_lote = {"ticker": "PETR4", "quantidade": 50, "preco_medio": 38.0}
+    posicao_sem_lote = dict(POSICAO_COM_LOTE, quantidade=50)
     resultado = avaliar(posicao_sem_lote, OPCAO_CALL_BOA, PARAMS)
     assert resultado.elegivel is False
     assert "lote insuficiente" in resultado.motivo_nao_elegivel
@@ -137,7 +144,7 @@ def test_criterios_json_expoe_os_tres_estados():
 
 
 def test_avaliar_covered_put_com_caixa_suficiente():
-    posicao = {"ticker": "PETR4", "quantidade": 0, "preco_medio": 38.0, "caixa_disponivel": 4000.0}
+    posicao = dict(POSICAO_COM_LOTE, quantidade=0, caixa_disponivel=4000.0)
     opcao_put = dict(OPCAO_CALL_BOA, tipo="PUT", codigo="PETRN360", strike=36.0)
     resultado = avaliar(posicao, opcao_put, PARAMS)
     assert resultado.tipo_operacao == "covered_put"
@@ -145,7 +152,7 @@ def test_avaliar_covered_put_com_caixa_suficiente():
 
 
 def test_avaliar_covered_put_com_caixa_insuficiente():
-    posicao = {"ticker": "PETR4", "quantidade": 0, "preco_medio": 38.0, "caixa_disponivel": 100.0}
+    posicao = dict(POSICAO_COM_LOTE, quantidade=0, caixa_disponivel=100.0)
     opcao_put = dict(OPCAO_CALL_BOA, tipo="PUT", codigo="PETRN360", strike=36.0)
     resultado = avaliar(posicao, opcao_put, PARAMS)
     assert resultado.elegivel is False
@@ -153,7 +160,7 @@ def test_avaliar_covered_put_com_caixa_insuficiente():
 
 
 def test_avaliar_covered_put_sem_info_de_caixa_marca_dado_insuficiente():
-    posicao = {"ticker": "PETR4", "quantidade": 0, "preco_medio": 38.0}
+    posicao = dict(POSICAO_COM_LOTE, quantidade=0)
     opcao_put = dict(OPCAO_CALL_BOA, tipo="PUT", codigo="PETRN360", strike=36.0)
     resultado = avaliar(posicao, opcao_put, PARAMS)
     assert resultado.elegivel is False
@@ -168,3 +175,89 @@ def test_avaliar_nunca_relaxa_criterio_com_quatro_de_cinco_passando():
     assert resultado.elegivel is False
     criterio_premio = next(c for c in resultado.criterios if c.nome == "premio_pct")
     assert criterio_premio.aprovado is False
+
+
+# --- Valorização a preço de mercado ----------------------------------------
+
+def test_posicao_sem_cotacao_e_dado_insuficiente_antes_dos_criterios():
+    """Sem preço de mercado não há como calcular prêmio nem exposição — a
+    avaliação para antes dos critérios, e não cai para `preco_medio`."""
+    posicao = dict(
+        POSICAO_COM_LOTE, preco_mercado=None, cotacao_em=None,
+        motivo_sem_cotacao="PETR4: cotação de 100.0h atrás, fora da janela de 72h",
+    )
+    resultado = avaliar(posicao, OPCAO_CALL_BOA, PARAMS)
+
+    assert resultado.elegivel is False
+    assert "dado insuficiente" in resultado.motivo_nao_elegivel
+    assert "PETR4" in resultado.motivo_nao_elegivel
+    assert "100.0h" in resultado.motivo_nao_elegivel, "a idade precisa chegar ao usuário"
+    assert resultado.criterios == [], "nem chegou a avaliar critérios de mercado"
+    assert resultado.bloqueado_por_resultado is False, (
+        "faltou cotação, não data de resultado"
+    )
+
+
+def test_premio_minimo_e_calculado_sobre_mercado_nao_sobre_custo():
+    """Prêmio de 0.20 sobre custo 38.0 dá 0.53% (passaria); sobre mercado
+    42.0 dá 0.48% (reprova). O critério tem de seguir o mercado."""
+    opcao = dict(OPCAO_CALL_BOA, preco=0.20)
+    resultado = avaliar(POSICAO_COM_LOTE, opcao, PARAMS)
+
+    criterio = next(c for c in resultado.criterios if c.nome == "premio_pct")
+    assert criterio.valor == pytest.approx(0.4762, abs=1e-4)
+    assert criterio.aprovado is False
+    assert "42.0" in criterio.detalhe, "o detalhe precisa dizer sobre o que calculou"
+
+
+def test_covered_call_coberta_passa_mesmo_com_strike_alto_para_o_patrimonio():
+    """O caso que motivou a change: com o notional cheio (strike 45 × 100 =
+    R$ 4.500) contra patrimônio de R$ 14.250, a exposição dava 31,6% e
+    reprovava toda covered call de PETR4. Coberta pelas ações, é zero."""
+    opcao = dict(OPCAO_CALL_BOA, strike=45.0, exposicao_pct_apos_operacao=0.0)
+    resultado = avaliar(POSICAO_COM_LOTE, opcao, PARAMS)
+
+    assert resultado.elegivel is True
+    criterio = next(
+        c for c in resultado.criterios if c.nome == "exposicao_pct_apos_operacao"
+    )
+    assert criterio.aprovado is True
+
+
+def test_exposicao_descoberta_acima_do_limite_continua_reprovando():
+    opcao = dict(OPCAO_CALL_BOA, exposicao_pct_apos_operacao=31.6)
+    resultado = avaliar(POSICAO_COM_LOTE, opcao, PARAMS)
+
+    assert resultado.elegivel is False
+    criterio = next(
+        c for c in resultado.criterios if c.nome == "exposicao_pct_apos_operacao"
+    )
+    assert criterio.aprovado is False
+
+
+def test_exposicao_pct_soma_o_descoberto_novo_ao_ja_existente(monkeypatch):
+    """A conta do percentual: descoberto da operação nova + descoberto já em
+    carteira, sobre o patrimônio a mercado."""
+    monkeypatch.setattr(
+        covered, "notional_descoberto_em_carteira", lambda cur, ticker: 1000.0
+    )
+    pct = covered._exposicao_pct_apos_operacao(
+        cur=None, ticker_objeto="PETR4",
+        nova_operacao_notional=500.0, patrimonio_total=15000.0,
+    )
+    assert pct == pytest.approx(10.0)
+
+
+def test_exposicao_pct_sem_patrimonio_devolve_none(monkeypatch):
+    monkeypatch.setattr(
+        covered, "notional_descoberto_em_carteira", lambda cur, ticker: 0.0
+    )
+    assert covered._exposicao_pct_apos_operacao(None, "PETR4", 500.0, 0.0) is None
+
+
+def test_criterios_json_registra_a_base_de_valorizacao():
+    dados = avaliar(POSICAO_COM_LOTE, OPCAO_CALL_BOA, PARAMS).criterios_json()
+    assert dados["base_valorizacao"] == {
+        "preco_mercado": 42.0,
+        "cotacao_em": "2026-08-15T12:00:00+00:00",
+    }

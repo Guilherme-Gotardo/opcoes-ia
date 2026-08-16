@@ -29,15 +29,33 @@ O que fazer com `INDISPONIVEL` é decidido por
 Reprovação no mérito sempre tem precedência: um delta fora da faixa
 reprova independentemente da política.
 
+VALOR É SEMPRE A MERCADO
+------------------------
+Todo valor de posição usado numa decisão — base do prêmio mínimo,
+cobertura e patrimônio do critério de exposição — vem da última cotação em
+`cotacoes`, via `src/market/valuation.py`. `preco_medio` é base de custo e
+não entra em critério nenhum.
+
+Sem cotação dentro da janela de frescor (`cotacao_frescor_maximo_horas`), a
+avaliação da posição para como "dado insuficiente", nomeando o ticker e a
+idade do dado. Não há fallback para `preco_medio`: seria estimar valor de
+mercado, o que a regra 1 do projeto proíbe.
+
+EXPOSIÇÃO CONTA SÓ A PARTE DESCOBERTA
+-------------------------------------
+`exposicao_maxima_pct_ativo` limita opção **descoberta** por ativo, não
+concentração da carteira. Numa covered call o notional já está coberto
+pelas ações em carteira; contá-lo como exposição nova era contagem dupla, e
+reprovava toda covered call de um ativo cujo strike fosse alto em relação ao
+patrimônio. Concentração continua visível na seção de exposição por ativo do
+relatório diário — ela é reportada, não barrada por critério.
+
 GAPS CONHECIDOS deste MVP (documentados, não escondidos):
 - Não existe, ainda, uma forma de registrar caixa/garantia disponível na
   carteira. Por isso `executar_avaliacao_carteira` não gera candidatas de
   covered put nesta fase (a função `avaliar` já suporta covered put e é
   testada para esse caso, bastando informar `caixa_disponivel` quando essa
   fonte existir).
-- A exposição usada no critério `exposicao_maxima_pct_ativo` é calculada
-  sobre `preco_medio` (custo), não sobre preço de mercado — mesmo gap que
-  afeta `report/daily.py`.
 """
 import datetime as dt
 import logging
@@ -50,6 +68,14 @@ import yaml
 from src.db.connection import get_connection
 from src.earnings.repository import EarningsEventRepository
 from src.earnings.risk import EarningsRiskService
+from src.market.valuation import (
+    ACOES_POR_CONTRATO,
+    cobertura_disponivel_em_contratos,
+    cotacao_vigente,
+    notional_descoberto,
+    notional_descoberto_em_carteira,
+    patrimonio_a_mercado,
+)
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -122,6 +148,12 @@ class ResultadoAvaliacao:
     #: Preenchido quando a sugestão saiu sob a política `sinalizar` sem
     #: data de resultado verificada. Acompanha a sugestão persistida.
     aviso_resultado: str | None = None
+    #: Preço de mercado e momento da coleta usados nos critérios. Sem eles,
+    #: uma sugestão auditada meses depois não permite reconstruir a conta —
+    #: e o motivo desta valorização é justamente que o número exibido não
+    #: dizia sobre o que fora calculado.
+    preco_mercado: float | None = None
+    cotacao_em: str | None = None
 
     def criterios_json(self) -> dict:
         return {
@@ -135,6 +167,10 @@ class ResultadoAvaliacao:
             "motivo_nao_elegivel": self.motivo_nao_elegivel,
             "bloqueado_por_resultado": self.bloqueado_por_resultado,
             "aviso_resultado": self.aviso_resultado,
+            "base_valorizacao": {
+                "preco_mercado": self.preco_mercado,
+                "cotacao_em": self.cotacao_em,
+            },
         }
 
 
@@ -177,7 +213,11 @@ def avaliar(posicao: dict, opcao: dict, params: dict) -> ResultadoAvaliacao:
     """Avalia UMA posição contra UMA opção candidata.
 
     `posicao`: {"ticker": str, "quantidade": int, "preco_medio": float,
+                "preco_mercado": float | None, "cotacao_em": str | None,
+                "motivo_sem_cotacao": str | None,
                 "caixa_disponivel": float | None}
+              (`preco_medio` é base de custo e NÃO é usado em nenhum
+              critério; todo valor de posição vem de `preco_mercado`)
     `opcao`: {"codigo": str, "tipo": "CALL"|"PUT", "strike": float,
               "vencimento": str, "preco": float, "delta": float,
               "iv_rank": float, "dias_vencimento": int,
@@ -195,6 +235,8 @@ def avaliar(posicao: dict, opcao: dict, params: dict) -> ResultadoAvaliacao:
         strike=opcao.get("strike"),
         vencimento=opcao.get("vencimento"),
         premio_estimado=opcao.get("preco"),
+        preco_mercado=posicao.get("preco_mercado"),
+        cotacao_em=posicao.get("cotacao_em"),
     )
 
     # 1. Pré-requisito estrutural (antes de qualquer critério de mercado)
@@ -221,6 +263,19 @@ def avaliar(posicao: dict, opcao: dict, params: dict) -> ResultadoAvaliacao:
                 f"{garantia_necessaria} necessário"
             )
             return resultado
+
+    # 1b. Sem preço de mercado não há o que avaliar.
+    #     Isto fica entre os pré-requisitos estruturais, não entre os
+    #     critérios, porque o preço de mercado é a BASE de dois deles
+    #     (prêmio mínimo e exposição) — não é um critério a menos, é a
+    #     impossibilidade de calcular. Diferente da data de resultado, aqui
+    #     não existe terceiro estado a oferecer: não há "avaliar os demais
+    #     critérios mesmo assim". E cair para `preco_medio` seria estimar
+    #     valor de mercado, proibido pela regra 1 do projeto.
+    if posicao.get("preco_mercado") is None:
+        motivo = posicao.get("motivo_sem_cotacao") or "sem cotação utilizável"
+        resultado.motivo_nao_elegivel = f"dado insuficiente: {motivo}"
+        return resultado
 
     # 2. Dado de mercado insuficiente?
     faltando = [c for c in _CAMPOS_MERCADO_OBRIGATORIOS if opcao.get(c) is None]
@@ -254,12 +309,16 @@ def avaliar(posicao: dict, opcao: dict, params: dict) -> ResultadoAvaliacao:
         params["dias_vencimento_min"] <= dias_venc <= params["dias_vencimento_max"],
     ))
 
-    valor_posicao_coberta = posicao["preco_medio"] * 100
-    premio_total = opcao["preco"] * 100
+    # Base a MERCADO, não a custo: o prêmio de uma opção é proporcional ao
+    # preço atual do ativo, e comparar prêmio de hoje com preço de entrada de
+    # meses atrás produz um percentual que não corresponde a nada.
+    valor_posicao_coberta = posicao["preco_mercado"] * ACOES_POR_CONTRATO
+    premio_total = opcao["preco"] * ACOES_POR_CONTRATO
     premio_pct = (premio_total / valor_posicao_coberta * 100) if valor_posicao_coberta else 0.0
     criterios.append(_criterio(
         "premio_pct", round(premio_pct, 4),
-        f"{premio_pct:.2f}% (mínimo {params['premio_minimo_pct']}%)",
+        f"{premio_pct:.2f}% (mínimo {params['premio_minimo_pct']}%, "
+        f"sobre preço de mercado {posicao['preco_mercado']})",
         premio_pct >= params["premio_minimo_pct"],
     ))
 
@@ -386,23 +445,22 @@ def _opcoes_call_candidatas(
     return candidatas
 
 
-def _exposicao_pct_apos_operacao(cur, ticker_objeto: str, nova_operacao_notional: float) -> float | None:
-    cur.execute(
-        "SELECT COALESCE(SUM(ABS(p.quantidade) * p.preco_medio), 0) "
-        "FROM posicoes p JOIN opcoes o ON o.codigo = p.ticker "
-        "WHERE p.tipo_ativo = 'OPCAO' AND p.fechada_em IS NULL AND o.ticker_objeto = %s",
-        (ticker_objeto,),
-    )
-    exposicao_atual = float(cur.fetchone()[0])
+def _exposicao_pct_apos_operacao(
+    cur, ticker_objeto: str, nova_operacao_notional: float, patrimonio_total: float
+) -> float | None:
+    """Percentual do patrimônio a mercado em opção DESCOBERTA do ativo,
+    considerando a operação avaliada.
 
-    cur.execute(
-        "SELECT COALESCE(SUM(ABS(quantidade) * preco_medio), 0) FROM posicoes "
-        "WHERE fechada_em IS NULL"
-    )
-    total_patrimonio = float(cur.fetchone()[0])
-    if not total_patrimonio:
+    O numerador soma o notional descoberto da operação nova com o das
+    posições em opção já abertas do mesmo ativo. A versão anterior somava
+    `ABS(quantidade) * preco_medio` das posições em opção — custo de prêmio
+    pago, outra grandeza — e o notional CHEIO da operação nova, mesmo quando
+    coberto.
+    """
+    if not patrimonio_total:
         return None
-    return (exposicao_atual + nova_operacao_notional) / total_patrimonio * 100
+    exposicao_atual = notional_descoberto_em_carteira(cur, ticker_objeto)
+    return (exposicao_atual + nova_operacao_notional) / patrimonio_total * 100
 
 
 def _sugestao_ja_existe_hoje(cur, codigo_opcao: str) -> bool:
@@ -449,16 +507,38 @@ def executar_avaliacao_carteira() -> list[ResultadoAvaliacao]:
     repo_earnings = EarningsEventRepository()
 
     with get_connection() as conn, conn.cursor() as cur:
+        # Patrimônio a mercado é o denominador do critério de exposição e é o
+        # mesmo para todas as posições — resolvido uma vez por execução.
+        patrimonio = patrimonio_a_mercado(cur, params)
+        if patrimonio.parcial:
+            log.warning(
+                "Patrimônio a mercado incompleto: sem cotação utilizável para %s",
+                ", ".join(patrimonio.tickers_sem_cotacao),
+            )
+
         posicoes = _posicoes_acao_abertas(cur)
         for posicao in posicoes:
+            # Uma consulta de cotação por POSIÇÃO, não por par posição×opção.
+            cotacao = cotacao_vigente(cur, posicao["ticker"], params)
+            posicao["preco_mercado"] = cotacao.preco
+            posicao["cotacao_em"] = (
+                cotacao.coletado_em.isoformat() if cotacao.coletado_em else None
+            )
+            posicao["motivo_sem_cotacao"] = None if cotacao.utilizavel else cotacao.motivo
+
             dias_resultado = _dias_para_resultado(
                 posicao["ticker"], hoje, risco_svc, repo_earnings
             )
             candidatas = _opcoes_call_candidatas(cur, posicao["ticker"], dias_resultado)
+            cobertura = cobertura_disponivel_em_contratos(cur, posicao["ticker"])
             for opcao in candidatas:
-                notional = (opcao["strike"] or 0) * 100
+                notional = notional_descoberto(
+                    contratos=1,
+                    strike=opcao["strike"] or 0.0,
+                    cobertura_em_contratos=cobertura,
+                )
                 opcao["exposicao_pct_apos_operacao"] = _exposicao_pct_apos_operacao(
-                    cur, posicao["ticker"], notional
+                    cur, posicao["ticker"], notional, patrimonio.total
                 )
                 resultado = avaliar(posicao, opcao, params)
                 resultados.append(resultado)

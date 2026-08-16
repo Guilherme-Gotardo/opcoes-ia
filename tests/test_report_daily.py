@@ -51,12 +51,24 @@ def _patched_get_connection(fake_conn):
     return _fake
 
 
-def _dispatcher(posicoes_rows, cotacoes_ultima, opcoes_ultima, sugestoes_rows, ticker_objeto_map=None):
+def _dispatcher(
+    posicoes_rows, cotacoes_ultima, opcoes_ultima, sugestoes_rows,
+    ticker_objeto_map=None, cotacoes=None, precos_opcao=None,
+):
+    """`cotacoes`: ticker -> (preco, coletado_em) usado na valorização a
+    mercado. `cotacoes_ultima` continua servindo só ao alerta de frescor da
+    coleta, que é outra pergunta."""
     ticker_objeto_map = ticker_objeto_map or {}
+    cotacoes = cotacoes or {}
+    precos_opcao = precos_opcao or {}
 
     def dispatch(query, params):
         if "FROM posicoes" in query and "SELECT ticker, tipo_ativo" in query:
             return "all", posicoes_rows
+        if "SELECT preco, coletado_em FROM cotacoes" in query:
+            return "one", cotacoes.get(params[0])
+        if "SELECT preco, coletado_em FROM opcoes" in query:
+            return "one", precos_opcao.get(params[0])
         if "ticker_objeto FROM opcoes WHERE codigo" in query:
             codigo = params[0]
             valor = ticker_objeto_map.get(codigo)
@@ -93,10 +105,13 @@ def test_relatorio_sem_posicoes_nem_sugestoes(tmp_path):
 
 def test_alerta_quando_cotacao_desatualizada(tmp_path):
     hoje = dt.date(2026, 8, 14)
-    ontem = dt.datetime(2026, 8, 13, 18, 0)
+    ontem = dt.datetime(2026, 8, 13, 18, 0, tzinfo=dt.timezone.utc)
     posicoes = [("PETR4", "ACAO", 100, 32.5)]
     fake_conn = _FakeConnection(
-        _FakeCursor(_dispatcher(posicoes, {"PETR4": ontem}, {"PETR4": None}, []))
+        _FakeCursor(_dispatcher(
+            posicoes, {"PETR4": ontem}, {"PETR4": None}, [],
+            cotacoes={"PETR4": (42.0, ontem)},
+        ))
     )
     with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
          patch("src.report.daily.get_settings", _settings_configurado), \
@@ -149,6 +164,125 @@ def test_dois_dias_geram_dois_arquivos_distintos(tmp_path):
 
     assert caminho1 != caminho2
     assert caminho1.exists() and caminho2.exists()
+
+
+# --- Valorização a preço de mercado ----------------------------------------
+
+def _relatorio_com(tmp_path, data, posicoes, cotacoes, **kwargs):
+    fake_conn = _FakeConnection(_FakeCursor(_dispatcher(
+        posicoes, {}, {}, [], cotacoes=cotacoes, **kwargs
+    )))
+    with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
+         patch("src.report.daily.get_settings", _settings_configurado), \
+         patch.object(daily, "REPORTS_DIR", tmp_path):
+        return daily.gerar_relatorio(data).read_text(encoding="utf-8")
+
+
+def test_patrimonio_usa_mercado_e_nao_preco_medio(tmp_path):
+    """O caso que motivou a change: 100 PETR4 a custo 32.50 valem R$ 4.200 a
+    mercado (42.00), não R$ 3.250."""
+    data = dt.date(2026, 8, 14)
+    coletado = dt.datetime(2026, 8, 14, 20, 0, tzinfo=dt.timezone.utc)
+    conteudo = _relatorio_com(
+        tmp_path, data,
+        posicoes=[("PETR4", "ACAO", 100, 32.5)],
+        cotacoes={"PETR4": (42.0, coletado)},
+    )
+
+    assert "Patrimônio total (a preço de mercado): R$ 4200.00" in conteudo
+    assert "3250.00" not in conteudo, "custo não pode aparecer como patrimônio"
+    assert "Patrimônio parcial" not in conteudo
+
+
+def test_preco_medio_continua_visivel_ao_lado_do_mercado(tmp_path):
+    data = dt.date(2026, 8, 14)
+    coletado = dt.datetime(2026, 8, 14, 20, 0, tzinfo=dt.timezone.utc)
+    conteudo = _relatorio_com(
+        tmp_path, data,
+        posicoes=[("PETR4", "ACAO", 100, 32.5)],
+        cotacoes={"PETR4": (42.0, coletado)},
+    )
+
+    assert "Preço médio (custo)" in conteudo
+    assert "Preço de mercado" in conteudo
+    assert "| 32.5000 | 42.0000 | 2026-08-14 | 4200.00 |" in conteudo
+
+
+def test_posicao_sem_cotacao_e_sinalizada_sem_valor_estimado(tmp_path):
+    data = dt.date(2026, 8, 14)
+    coletado = dt.datetime(2026, 8, 14, 20, 0, tzinfo=dt.timezone.utc)
+    conteudo = _relatorio_com(
+        tmp_path, data,
+        posicoes=[("PETR4", "ACAO", 100, 32.5), ("VALE3", "ACAO", 100, 55.0)],
+        cotacoes={"PETR4": (42.0, coletado)},
+    )
+
+    assert "VALE3: nenhuma cotação registrada" in conteudo
+    assert "não valorizada a mercado" in conteudo
+    assert "5500.00" not in conteudo, "não pode valorizar VALE3 pelo custo"
+    assert "Patrimônio total (a preço de mercado): R$ 4200.00" in conteudo
+
+
+def test_patrimonio_parcial_e_declarado_com_quem_ficou_de_fora(tmp_path):
+    data = dt.date(2026, 8, 14)
+    coletado = dt.datetime(2026, 8, 14, 20, 0, tzinfo=dt.timezone.utc)
+    conteudo = _relatorio_com(
+        tmp_path, data,
+        posicoes=[("PETR4", "ACAO", 100, 32.5), ("VALE3", "ACAO", 100, 55.0)],
+        cotacoes={"PETR4": (42.0, coletado)},
+    )
+
+    assert "Patrimônio parcial" in conteudo
+    assert "não cobre VALE3" in conteudo
+
+
+def test_cotacao_fora_da_janela_informa_a_idade(tmp_path):
+    data = dt.date(2026, 8, 14)
+    velha = dt.datetime(2026, 8, 5, 20, 0, tzinfo=dt.timezone.utc)
+    conteudo = _relatorio_com(
+        tmp_path, data,
+        posicoes=[("PETR4", "ACAO", 100, 32.5)],
+        cotacoes={"PETR4": (42.0, velha)},
+    )
+
+    assert "fora da janela" in conteudo
+    assert "h atrás" in conteudo
+    assert "4200.00" not in conteudo, "cotação velha não pode virar valor"
+
+
+def test_exposicao_percentual_sai_sobre_o_patrimonio_a_mercado(tmp_path):
+    data = dt.date(2026, 8, 14)
+    coletado = dt.datetime(2026, 8, 14, 20, 0, tzinfo=dt.timezone.utc)
+    conteudo = _relatorio_com(
+        tmp_path, data,
+        posicoes=[("PETR4", "ACAO", 100, 32.5), ("VALE3", "ACAO", 100, 20.0)],
+        cotacoes={
+            "PETR4": (30.0, coletado),   # R$ 3.000
+            "VALE3": (10.0, coletado),   # R$ 1.000
+        },
+    )
+
+    assert "sobre o patrimônio a mercado" in conteudo
+    assert "- PETR4: 75.00% do patrimônio" in conteudo
+    assert "- VALE3: 25.00% do patrimônio" in conteudo
+
+
+def test_opcao_e_valorizada_mas_fica_fora_do_patrimonio(tmp_path):
+    data = dt.date(2026, 8, 14)
+    coletado = dt.datetime(2026, 8, 14, 20, 0, tzinfo=dt.timezone.utc)
+    conteudo = _relatorio_com(
+        tmp_path, data,
+        posicoes=[("PETR4", "ACAO", 100, 32.5), ("PETRI280", "OPCAO", -1, 0.95)],
+        cotacoes={"PETR4": (42.0, coletado)},
+        precos_opcao={"PETRI280": (1.10, coletado)},
+        ticker_objeto_map={"PETRI280": "PETR4"},
+    )
+
+    assert "Patrimônio total (a preço de mercado): R$ 4200.00" in conteudo, (
+        "o valor da opção não pode somar ao patrimônio"
+    )
+    assert "Só posições em ação entram no patrimônio" in conteudo
+    assert "| PETRI280 | OPCAO | -1 | 0.9500 | 1.1000 |" in conteudo
 
 
 # --- Seção de avaliações bloqueadas por data de resultado -------------------

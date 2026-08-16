@@ -13,6 +13,7 @@ from pathlib import Path
 
 from src.config import get_settings
 from src.db.connection import get_connection
+from src.market.valuation import carregar_params, cotacao_vigente
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -41,14 +42,76 @@ def _ticker_objeto_da_opcao(cur, codigo: str) -> str | None:
     return row[0] if row else None
 
 
-def _resumo_carteira(cur) -> dict:
+def _preco_opcao(cur, codigo: str) -> tuple[float | None, dt.datetime | None]:
+    cur.execute(
+        "SELECT preco, coletado_em FROM opcoes WHERE codigo = %s "
+        "ORDER BY coletado_em DESC LIMIT 1",
+        (codigo,),
+    )
+    row = cur.fetchone()
+    if not row or row[0] is None:
+        return None, None
+    return float(row[0]), row[1]
+
+
+def _referencia_de_frescor(data: dt.date) -> dt.datetime:
+    """Momento contra o qual a idade das cotações é medida.
+
+    Para o relatório de hoje é agora. Para um relatório gerado com data
+    anterior é o fim daquele dia — senão o frescor seria julgado contra o
+    presente e um relatório de duas semanas atrás apareceria inteiro como
+    "sem cotação utilizável".
+    """
+    agora = dt.datetime.now(dt.timezone.utc)
+    fim_do_dia = dt.datetime.combine(
+        data, dt.time.max, tzinfo=dt.timezone.utc
+    )
+    return min(agora, fim_do_dia)
+
+
+def _valorizar(cur, posicao: dict, params: dict, agora: dt.datetime) -> None:
+    """Preenche preço de mercado e valor da posição, ou o motivo de não ter.
+
+    Nunca cai para `preco_medio`: valorizar custo como se fosse mercado é o
+    bug que esta função existe para não repetir. Sem cotação utilizável a
+    posição fica sem valor e o relatório diz por quê.
+    """
+    if posicao["tipo_ativo"] == "ACAO":
+        cotacao = cotacao_vigente(cur, posicao["ticker"], params, agora)
+        preco, momento = cotacao.preco, cotacao.coletado_em
+        motivo = None if cotacao.utilizavel else cotacao.motivo
+    else:
+        preco, momento = _preco_opcao(cur, posicao["ticker"])
+        motivo = (
+            None if preco is not None
+            else f"{posicao['ticker']}: nenhum preço de opção coletado"
+        )
+
+    posicao["preco_mercado"] = preco
+    posicao["cotacao_em"] = momento
+    posicao["motivo_sem_cotacao"] = motivo
+    posicao["valor"] = None if preco is None else abs(posicao["quantidade"]) * preco
+
+
+def _resumo_carteira(cur, params: dict, agora: dt.datetime) -> dict:
     posicoes = _posicoes_abertas(cur)
     for p in posicoes:
-        p["valor"] = abs(p["quantidade"]) * p["preco_medio"]
-    total_patrimonio = sum(p["valor"] for p in posicoes)
+        _valorizar(cur, p, params, agora)
+
+    # Só posição em AÇÃO entra no patrimônio: o valor de uma opção é derivado
+    # das mesmas ações já contadas, e somar os dois é contagem dupla — a
+    # mesma que inviabilizava o critério de exposição.
+    acoes = [p for p in posicoes if p["tipo_ativo"] == "ACAO"]
+    total_patrimonio = sum(p["valor"] for p in acoes if p["valor"] is not None)
+    sem_cotacao = [
+        p["motivo_sem_cotacao"] for p in posicoes if p["motivo_sem_cotacao"]
+    ]
+    patrimonio_parcial = any(p["valor"] is None for p in acoes)
 
     exposicao_por_ativo: dict[str, float] = {}
     for p in posicoes:
+        if p["valor"] is None:
+            continue
         if p["tipo_ativo"] == "ACAO":
             objeto = p["ticker"]
         else:
@@ -62,6 +125,11 @@ def _resumo_carteira(cur) -> dict:
     return {
         "posicoes": posicoes,
         "total_patrimonio": total_patrimonio,
+        "patrimonio_parcial": patrimonio_parcial,
+        "tickers_sem_cotacao": [
+            p["ticker"] for p in acoes if p["valor"] is None
+        ],
+        "motivos_sem_cotacao": sem_cotacao,
         "exposicao_pct_por_ativo": exposicao_pct,
     }
 
@@ -78,6 +146,14 @@ def _ultima_coleta(cur, tabela: str, coluna_ticker: str, ticker: str) -> dt.date
 def _alertas(cur, posicoes: list[dict], data: dt.date) -> list[str]:
     alertas: list[str] = []
     tickers_acao = sorted({p["ticker"] for p in posicoes if p["tipo_ativo"] == "ACAO"})
+
+    # Posições que ficaram sem valorização vêm primeiro: são as que tornam o
+    # patrimônio incompleto, e o motivo já traz ticker e idade do dado.
+    for p in posicoes:
+        if p.get("motivo_sem_cotacao"):
+            alertas.append(
+                f"{p['motivo_sem_cotacao']} — posição não valorizada a mercado."
+            )
 
     for ticker in tickers_acao:
         ultima_cotacao = _ultima_coleta(cur, "cotacoes", "ticker", ticker)
@@ -177,17 +253,43 @@ def _renderizar_markdown(
     if not resumo["posicoes"]:
         linhas.append("Nenhuma posição aberta.")
     else:
-        linhas.append(f"Patrimônio total (proxy, a preço médio de entrada): R$ {resumo['total_patrimonio']:.2f}")
-        linhas.append("")
-        linhas.append("| Ticker | Tipo | Quantidade | Preço médio | Valor |")
-        linhas.append("|---|---|---|---|---|")
-        for p in resumo["posicoes"]:
+        linhas.append(
+            f"Patrimônio total (a preço de mercado): R$ {resumo['total_patrimonio']:.2f}"
+        )
+        if resumo.get("patrimonio_parcial"):
+            sem = ", ".join(resumo.get("tickers_sem_cotacao", []))
+            linhas.append("")
             linhas.append(
-                f"| {p['ticker']} | {p['tipo_ativo']} | {p['quantidade']} | "
-                f"{p['preco_medio']:.4f} | {p['valor']:.2f} |"
+                f"⚠️ **Patrimônio parcial:** não cobre {sem} — sem cotação "
+                "utilizável, e valorizar pelo preço de entrada seria estimar."
             )
         linhas.append("")
-        linhas.append("**Exposição por ativo-objeto:**")
+        linhas.append(
+            "Só posições em ação entram no patrimônio: o valor de uma opção "
+            "deriva das mesmas ações já contadas."
+        )
+        linhas.append("")
+        linhas.append(
+            "| Ticker | Tipo | Quantidade | Preço médio (custo) | "
+            "Preço de mercado | Cotação de | Valor a mercado |"
+        )
+        linhas.append("|---|---|---|---|---|---|---|")
+        for p in resumo["posicoes"]:
+            if p["valor"] is None:
+                preco_mercado = valor = "—"
+                momento = "sem cotação"
+            else:
+                preco_mercado = f"{p['preco_mercado']:.4f}"
+                valor = f"{p['valor']:.2f}"
+                momento = (
+                    p["cotacao_em"].date().isoformat() if p["cotacao_em"] else "—"
+                )
+            linhas.append(
+                f"| {p['ticker']} | {p['tipo_ativo']} | {p['quantidade']} | "
+                f"{p['preco_medio']:.4f} | {preco_mercado} | {momento} | {valor} |"
+            )
+        linhas.append("")
+        linhas.append("**Exposição por ativo-objeto** (sobre o patrimônio a mercado):")
         for objeto, pct in sorted(resumo["exposicao_pct_por_ativo"].items()):
             linhas.append(f"- {objeto}: {pct:.2f}% do patrimônio")
     linhas.append("")
@@ -244,8 +346,9 @@ def gerar_relatorio(
     REPORTS_DIR.mkdir(exist_ok=True)
     caminho = REPORTS_DIR / f"{data.isoformat()}.md"
 
+    params = carregar_params()
     with get_connection() as conn, conn.cursor() as cur:
-        resumo = _resumo_carteira(cur)
+        resumo = _resumo_carteira(cur, params, _referencia_de_frescor(data))
         alertas = _alertas(cur, resumo["posicoes"], data)
         sugestoes = _sugestoes_do_dia(cur, data)
 
