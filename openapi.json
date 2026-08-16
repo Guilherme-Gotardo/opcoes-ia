@@ -347,6 +347,98 @@
         }
       }
     },
+    "/catalogo": {
+      "get": {
+        "tags": [
+          "carteira"
+        ],
+        "summary": "Buscar No Catalogo",
+        "description": "Procura ativos por código ou nome no catálogo do provedor.\n\nExiste para o cadastro não depender de digitação: nome e CNPJ vêm da\nfonte em vez da memória do usuário. Um dígito trocado no CNPJ raiz\nquebra o vínculo com o dump da CVM, e o calendário de resultados fica\nsilenciosamente vazio para aquele ativo.\n\nCada chamada consome 1 request do orçamento diário — a interface deve\nbuscar no envio, nunca a cada tecla.",
+        "operationId": "buscar_no_catalogo_catalogo_get",
+        "parameters": [
+          {
+            "name": "busca",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Busca"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CandidatoResposta"
+                  },
+                  "title": "Response Buscar No Catalogo Catalogo Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/catalogo/{ticker}/cnpj": {
+      "get": {
+        "tags": [
+          "carteira"
+        ],
+        "summary": "Cnpj Do Catalogo",
+        "description": "Raiz do CNPJ do ativo, para preencher o vínculo com a CVM.",
+        "operationId": "cnpj_do_catalogo_catalogo__ticker__cnpj_get",
+        "parameters": [
+          {
+            "name": "ticker",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ticker"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Cnpj Do Catalogo Catalogo  Ticker  Cnpj Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/carteira": {
       "get": {
         "summary": "Carteira",
@@ -770,6 +862,70 @@
           "ja_entregou"
         ],
         "title": "CanalColetaResposta"
+      },
+      "CandidatoResposta": {
+        "properties": {
+          "ticker": {
+            "type": "string",
+            "title": "Ticker"
+          },
+          "nome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nome",
+            "description": "`null` quando a fonte devolve o próprio ticker como nome (BDR e fundos) — assumir seria derivar nome do ticker, que a regra 1 do projeto proíbe"
+          },
+          "tipo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tipo"
+          },
+          "setor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setor"
+          },
+          "impedimentos": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Impedimentos"
+          },
+          "cadastravel": {
+            "type": "boolean",
+            "title": "Cadastravel"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ticker",
+          "nome",
+          "tipo",
+          "setor",
+          "impedimentos",
+          "cadastravel"
+        ],
+        "title": "CandidatoResposta",
+        "description": "Um ativo do catálogo do provedor, já avaliado quanto ao cadastro.\n\n`impedimentos` não vazio significa que o candidato aparece mas NÃO pode\nser cadastrado como está — com o motivo, para não sumir sem explicação\ne o usuário procurar de novo pelo mesmo ticker."
       },
       "CandlesResposta": {
         "properties": {

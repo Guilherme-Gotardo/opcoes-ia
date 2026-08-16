@@ -46,6 +46,7 @@ from src.assets.manage import (
     universo_de_analise,
     vigiar,
 )
+from src.assets.catalogo import CatalogoIndisponivel, buscar, cnpj_raiz_de
 from src.caixa.manage import LancamentoInvalido, extrato, registrar, saldo
 from src.config import get_settings
 from src.portfolio.manage import (
@@ -133,6 +134,26 @@ class EncerramentoEntrada(BaseModel):
         description="Obrigatório em `recomprada`: é o que se pagou para sair. "
                     "Sem ele o resultado sairia superestimado",
     )
+
+
+class CandidatoResposta(BaseModel):
+    """Um ativo do catálogo do provedor, já avaliado quanto ao cadastro.
+
+    `impedimentos` não vazio significa que o candidato aparece mas NÃO pode
+    ser cadastrado como está — com o motivo, para não sumir sem explicação
+    e o usuário procurar de novo pelo mesmo ticker.
+    """
+
+    ticker: str
+    nome: str | None = Field(
+        description="`null` quando a fonte devolve o próprio ticker como "
+                    "nome (BDR e fundos) — assumir seria derivar nome do "
+                    "ticker, que a regra 1 do projeto proíbe"
+    )
+    tipo: str | None
+    setor: str | None
+    impedimentos: list[str]
+    cadastravel: bool
 
 
 class VigiarEntrada(BaseModel):
@@ -353,3 +374,43 @@ def lancar_caixa(entrada: CaixaEntrada) -> dict:
     except LancamentoInvalido as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     return {"id": lancamento_id, "saldo": saldo()}
+
+
+# --- Catálogo de ativos -----------------------------------------------------
+
+@router.get("/catalogo", response_model=list[CandidatoResposta])
+def buscar_no_catalogo(busca: str) -> list[CandidatoResposta]:
+    """Procura ativos por código ou nome no catálogo do provedor.
+
+    Existe para o cadastro não depender de digitação: nome e CNPJ vêm da
+    fonte em vez da memória do usuário. Um dígito trocado no CNPJ raiz
+    quebra o vínculo com o dump da CVM, e o calendário de resultados fica
+    silenciosamente vazio para aquele ativo.
+
+    Cada chamada consome 1 request do orçamento diário — a interface deve
+    buscar no envio, nunca a cada tecla.
+    """
+    try:
+        candidatos = buscar(busca)
+    except CatalogoIndisponivel as e:
+        # 502: a falha é do provedor, não da requisição. Devolver lista
+        # vazia faria "não consegui procurar" parecer "não existe".
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    return [
+        CandidatoResposta(
+            ticker=c.ticker, nome=c.nome, tipo=c.tipo, setor=c.setor,
+            impedimentos=list(c.impedimentos), cadastravel=c.cadastravel,
+        )
+        for c in candidatos
+    ]
+
+
+@router.get("/catalogo/{ticker}/cnpj")
+def cnpj_do_catalogo(ticker: str) -> dict:
+    """Raiz do CNPJ do ativo, para preencher o vínculo com a CVM."""
+    try:
+        raiz = cnpj_raiz_de(ticker)
+    except CatalogoIndisponivel as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    return {"ticker": ticker.strip().upper(), "cnpj_raiz": raiz}
