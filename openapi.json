@@ -184,6 +184,169 @@
         }
       }
     },
+    "/watchlist": {
+      "get": {
+        "tags": [
+          "carteira"
+        ],
+        "summary": "Listar Watchlist",
+        "description": "Ativos vigiados e o custo que isso impõe ao orçamento diário.",
+        "operationId": "listar_watchlist_watchlist_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WatchlistResposta"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "carteira"
+        ],
+        "summary": "Adicionar A Watchlist",
+        "description": "Passa a vigiar um ativo JÁ CADASTRADO.\n\nVigiar não cadastra: `ativos` é alvo de FK de cotação, opção e notícia,\ne criar o registro aqui exigiria inventar o nome do ativo — o que a\nregra 1 do projeto proíbe.",
+        "operationId": "adicionar_a_watchlist_watchlist_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VigiarEntrada"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Adicionar A Watchlist Watchlist Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/watchlist/{ticker}/remover": {
+      "post": {
+        "tags": [
+          "carteira"
+        ],
+        "summary": "Remover Da Watchlist",
+        "description": "Sai da varredura e para de consumir orçamento. O cadastro e o\nhistórico permanecem — isto não descadastra o ativo.",
+        "operationId": "remover_da_watchlist_watchlist__ticker__remover_post",
+        "parameters": [
+          {
+            "name": "ticker",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ticker"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/caixa": {
+      "get": {
+        "tags": [
+          "carteira"
+        ],
+        "summary": "Ler Caixa",
+        "operationId": "ler_caixa_caixa_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaixaResposta"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "carteira"
+        ],
+        "summary": "Lancar Caixa",
+        "description": "Registra um lançamento. É o que torna uma PUT coberta, coberta:\nsem garantia para honrar o exercício ao strike, `avaliar()` recusa a\noperação em vez de tratá-la como coberta.",
+        "operationId": "lancar_caixa_caixa_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaixaEntrada"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Lancar Caixa Caixa Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/carteira": {
       "get": {
         "summary": "Carteira",
@@ -511,6 +674,59 @@
           "criado_em"
         ],
         "title": "AtivoResposta"
+      },
+      "CaixaEntrada": {
+        "properties": {
+          "valor": {
+            "type": "number",
+            "title": "Valor",
+            "description": "Positivo aporta, negativo retira. Zero é recusado"
+          },
+          "descricao": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Descricao"
+          }
+        },
+        "type": "object",
+        "required": [
+          "valor"
+        ],
+        "title": "CaixaEntrada"
+      },
+      "CaixaResposta": {
+        "properties": {
+          "saldo": {
+            "type": "number",
+            "title": "Saldo"
+          },
+          "garante_put": {
+            "type": "boolean",
+            "title": "Garante Put",
+            "description": "False quando o saldo é zero — e é isso que faz `avaliar()` recusar a put como não coberta"
+          },
+          "lancamentos": {
+            "items": {
+              "$ref": "#/components/schemas/LancamentoResposta"
+            },
+            "type": "array",
+            "title": "Lancamentos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "saldo",
+          "garante_put",
+          "lancamentos"
+        ],
+        "title": "CaixaResposta",
+        "description": "Saldo e extrato.\n\nO saldo é a SOMA dos lançamentos, nunca um número sobrescrito: é o\n\"como se chegou até aqui\" que explica, meses depois, por que uma\navaliação aceitou ou recusou uma put."
       },
       "CanalColetaResposta": {
         "properties": {
@@ -974,6 +1190,42 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "LancamentoResposta": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "valor": {
+            "type": "number",
+            "title": "Valor"
+          },
+          "descricao": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Descricao"
+          },
+          "ocorrido_em": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Ocorrido Em"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "valor",
+          "descricao",
+          "ocorrido_em"
+        ],
+        "title": "LancamentoResposta"
       },
       "MotivoDesfechoResposta": {
         "properties": {
@@ -1845,6 +2097,74 @@
           "volume"
         ],
         "title": "VelaResposta"
+      },
+      "VigiarEntrada": {
+        "properties": {
+          "ticker": {
+            "type": "string",
+            "title": "Ticker"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo",
+            "description": "Por que este ticker entrou na watchlist — a pergunta que aparece meses depois, quando ninguém lembra"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ticker"
+        ],
+        "title": "VigiarEntrada"
+      },
+      "WatchlistResposta": {
+        "properties": {
+          "vigiados": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Vigiados"
+          },
+          "universo": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Universo",
+            "description": "CARTEIRA ∪ VIGIADOS — o que os ETLs coletam e a varredura percorre"
+          },
+          "requests_por_ticker_dia": {
+            "type": "integer",
+            "title": "Requests Por Ticker Dia",
+            "description": "Cotação + duas janelas de vela + opções"
+          },
+          "orcamento_diario": {
+            "type": "integer",
+            "title": "Orcamento Diario"
+          },
+          "tickers_suportados": {
+            "type": "integer",
+            "title": "Tickers Suportados",
+            "description": "Teto de tickers no universo, dado o orçamento"
+          }
+        },
+        "type": "object",
+        "required": [
+          "vigiados",
+          "universo",
+          "requests_por_ticker_dia",
+          "orcamento_diario",
+          "tickers_suportados"
+        ],
+        "title": "WatchlistResposta",
+        "description": "A watchlist e o custo que ela impõe.\n\nO orçamento vem junto de propósito: vigiar não é de graça, e o número\nde vigiados é limitado por ele. Mostrar a lista sem mostrar o teto\ndeixaria o usuário descobrir o limite quando a coleta da carteira\nfalhasse no fim do dia."
       }
     }
   }

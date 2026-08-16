@@ -163,3 +163,79 @@ def test_contrato_declara_que_registrar_nao_e_ordem():
     schema = app.openapi()["components"]["schemas"]["PosicaoCriada"]
     assert "executou_ordem" in schema["properties"]
     assert "corretora" in str(schema).lower() or "ordem" in str(schema).lower()
+
+
+# --- watchlist e caixa ------------------------------------------------------
+
+def test_watchlist_mostra_o_custo_junto_da_lista():
+    """Vigiar não é de graça. Mostrar a lista sem o teto deixaria o usuário
+    descobrir o limite quando a coleta da carteira falhasse no fim do dia."""
+    from types import SimpleNamespace
+
+    with patch.object(escrita, "tickers_vigiados", return_value=["ITUB4", "BBAS3"]), \
+         patch.object(escrita, "universo_de_analise",
+                      return_value=["BBAS3", "ITUB4", "PETR4"]), \
+         patch.object(escrita, "get_settings",
+                      return_value=SimpleNamespace(brapi_requests_dia_maximo=600)):
+        corpo = cliente.get("/watchlist").json()
+
+    assert corpo["vigiados"] == ["ITUB4", "BBAS3"]
+    assert corpo["universo"] == ["BBAS3", "ITUB4", "PETR4"], "carteira ∪ vigiados"
+    assert corpo["tickers_suportados"] == 150, "600 / 4 requests por ticker"
+
+
+def test_vigiar_ativo_nao_cadastrado_devolve_o_comando():
+    """Vigiar não cadastra: criar o registro aqui exigiria inventar o nome
+    do ativo, o que a regra 1 do projeto proíbe."""
+    erro = AtivoInvalido(
+        'ativo não cadastrado: XPTO3. Cadastre antes de vigiar:\n'
+        '  python -m src.assets.manage add XPTO3 "<nome do ativo>" acao'
+    )
+    with patch.object(escrita, "vigiar", side_effect=erro):
+        r = cliente.post("/watchlist", json={"ticker": "XPTO3"})
+
+    assert r.status_code == 422
+    assert "assets.manage add" in r.json()["detail"]
+
+
+def test_vigiar_normaliza_e_guarda_o_motivo():
+    with patch.object(escrita, "vigiar") as v:
+        r = cliente.post("/watchlist", json={"ticker": "itub4", "motivo": "IV alta"})
+    assert r.status_code == 201
+    assert r.json()["ticker"] == "ITUB4"
+    v.assert_called_once_with("itub4", "IV alta")
+
+
+def test_sair_da_watchlist_nao_descadastra():
+    with patch.object(escrita, "parar_de_vigiar") as p:
+        r = cliente.post("/watchlist/ITUB4/remover")
+    assert r.status_code == 204
+    p.assert_called_once_with("ITUB4")
+
+
+def test_caixa_zerado_nao_garante_put():
+    """Zero é o que faz `avaliar()` recusar a put como não coberta."""
+    with patch.object(escrita, "saldo", return_value=0.0), \
+         patch.object(escrita, "extrato", return_value=[]):
+        corpo = cliente.get("/caixa").json()
+    assert corpo["saldo"] == 0.0
+    assert corpo["garante_put"] is False
+
+
+def test_caixa_com_saldo_garante_put():
+    with patch.object(escrita, "saldo", return_value=20000.0), \
+         patch.object(escrita, "extrato", return_value=[{
+             "id": 1, "valor": 20000.0, "descricao": "aporte", "ocorrido_em": AGORA,
+         }]):
+        corpo = cliente.get("/caixa").json()
+    assert corpo["garante_put"] is True
+    assert corpo["lancamentos"][0]["valor"] == 20000.0
+
+
+def test_lancamento_zero_e_recusado_pelo_dominio():
+    from src.caixa.manage import LancamentoInvalido as Invalido
+
+    with patch.object(escrita, "registrar",
+                      side_effect=Invalido("valor não pode ser zero")):
+        r = cliente.post("/caixa", json={"valor": 0})
+    assert r.status_code == 422
