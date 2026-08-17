@@ -16,8 +16,10 @@ import logging
 
 import requests
 
-from src.config import get_settings
+from src.assets.manage import universo_de_analise
+from src.config import get_news_settings
 from src.db.connection import get_connection
+from src.etl.result import DetalheAlvo, EstadoAlvo, ResultadoColeta
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -26,7 +28,7 @@ NEWS_API_URL = "https://newsapi.org/v2/everything"
 
 
 def fetch(ticker: str) -> list[dict]:
-    settings = get_settings()
+    settings = get_news_settings()
     resp = requests.get(
         NEWS_API_URL,
         params={"q": ticker, "language": "pt", "sortBy": "publishedAt", "pageSize": 10},
@@ -67,30 +69,43 @@ def upsert(ticker: str, articles: list[dict]) -> int:
     return inseridas
 
 
-def main(tickers: list[str] | None = None) -> None:
-    settings = get_settings()
+def main(tickers: list[str] | None = None) -> ResultadoColeta:
+    settings = get_news_settings()
     if not settings.news_api_key:
         log.warning(
             "fetch_news: NEWS_API_KEY não configurada — etapa de notícias "
             "pulada nesta execução (não é um erro; configure em .env para habilitar)."
         )
-        return
+        return ResultadoColeta.pulado(
+            "noticias", "newsapi", "fonte_nao_configurada",
+        )
 
-    tickers = tickers or _tickers_da_carteira()
+    if tickers is None:
+        tickers = _tickers_da_carteira()
     if not tickers:
-        log.warning("Nenhum ticker na carteira — nada a coletar.")
-        return
+        log.warning("Nenhum ticker na carteira ou watchlist — nada a coletar.")
+        return ResultadoColeta.pulado("noticias", "newsapi", "universo_vazio")
 
     total = 0
     falhas: dict[str, str] = {}
+    detalhes: list[DetalheAlvo] = []
     for t in tickers:
         try:
             articles = fetch(t)
             n = upsert(t, articles)
             total += n
+            detalhes.append(DetalheAlvo(
+                t, EstadoAlvo.SUCESSO, registros_persistidos=n,
+            ))
             log.info("Notícias de %s: %d novas (de %d retornadas).", t, n, len(articles))
         except Exception as exc:  # noqa: BLE001 — isolamos falha por ticker de propósito
             falhas[t] = str(exc)
+            detalhes.append(DetalheAlvo(
+                t,
+                EstadoAlvo.FALHA,
+                codigo_motivo="erro_coleta",
+                detalhe=str(exc),
+            ))
             log.error("Falha ao coletar notícias de %s: %s", t, exc)
 
     log.info(
@@ -100,15 +115,11 @@ def main(tickers: list[str] | None = None) -> None:
     if falhas:
         for t, motivo in falhas.items():
             log.error("  - %s: %s", t, motivo)
+    return ResultadoColeta.de_detalhes("noticias", "newsapi", detalhes)
 
 
 def _tickers_da_carteira() -> list[str]:
-    with get_connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT DISTINCT ticker FROM posicoes "
-            "WHERE tipo_ativo = 'ACAO' AND fechada_em IS NULL"
-        )
-        return [row[0] for row in cur.fetchall()]
+    return universo_de_analise()
 
 
 if __name__ == "__main__":

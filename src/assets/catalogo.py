@@ -41,7 +41,7 @@ from dataclasses import dataclass
 
 import requests
 
-from src.config import get_settings
+from src.config import get_brapi_settings
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -126,7 +126,7 @@ def buscar(termo: str, limite: int = 15) -> list[Candidato]:
     if not termo:
         return []
 
-    settings = get_settings()
+    settings = get_brapi_settings()
     try:
         resp = requests.get(
             BRAPI_LISTA,
@@ -160,7 +160,7 @@ def cnpj_raiz_de(ticker: str) -> str | None:
     mão, um dígito trocado quebra o vínculo em silêncio — o calendário fica
     vazio para aquele ativo e nada aponta a causa.
     """
-    settings = get_settings()
+    settings = get_brapi_settings()
     try:
         resp = requests.get(
             f"{BRAPI_COTACAO}/{ticker.strip().upper()}",

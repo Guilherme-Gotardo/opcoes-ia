@@ -27,8 +27,8 @@ import sys
 # Importar `config` carrega o `.env` (ele chama `load_dotenv` no import), que
 # é a convenção do projeto — sem isto, uma chave presente no arquivo
 # apareceria como "não está no ambiente" e a mensagem mandaria configurar o
-# que já estava configurado. Não usamos `get_settings()` de propósito: ele
-# exige DATABASE_URL e BRAPI_TOKEN, que não têm nada a ver com esta chamada.
+# que já estava configurado. Não usamos loaders de outro runtime de propósito:
+# esta chamada não depende de DATABASE_URL nem de BRAPI_TOKEN.
 import src.config  # noqa: F401
 from src.agente.ferramentas import ConfiguracaoInvalida, do_arquivo
 

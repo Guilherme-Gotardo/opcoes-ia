@@ -457,15 +457,14 @@ docker compose up -d db
       em `docs/PREGAO.md`. Nada no código impede estourar: o sintoma é o
       `fetch_quotes` cortando a lista pelo fim, e os últimos tickers em ordem
       alfabética param de ter preço
-- [ ] **Migrações 006 e 007 ainda não aplicadas no Neon** (conferido em
-      2026-08-16: `ativos` não tem `vigiado`, e não existem
-      `caixa_lancamentos` nem `execucao_pipeline`). As telas de Watchlist,
-      Caixa e Execução automática dependem delas — a de Execução degrada com
-      `disponivel: false`, as outras duas quebram. Destrava com
-      `python -m src.db.bootstrap` apontando para o Neon
-- [ ] **Alerta de "não rodou hoje" não existe.** A tela mostra, ninguém é
-      avisado. Um log que vive no banco não registra a queda do próprio banco,
-      então o alerta precisa de caminho independente — Fase 5 do plano
+- [x] **Migrações 001 a 010 aplicadas no Neon** em 2026-08-17 durante o
+      primeiro deploy serverless. Watchlist, caixa, execução por etapa,
+      relatórios duráveis e idempotência estão no banco real
+- [x] **Alerta independente de "não rodou hoje" implementado** em
+      `scripts/alertar_pregao.py` + `opcoes-ia-alerta.timer`. Depois do
+      fechamento, consulta o log de execução e envia por SMTP se não houve
+      execução, houve falha/órfã ou o banco não respondeu. Não depende do
+      agente de IA; sem SMTP configurado falha explicitamente no journal
 - [x] **Enriquecimento quantitativo** (Fase 2 do plano, 2026-08-16):
       `src/quant/` + migração 008. Gregas, preço teórico, probabilidade de
       exercício, percentil de IV e skew, por árvore binomial CRR (QuantLib,
@@ -530,18 +529,38 @@ docker compose up -d db
       avaliação intradiária perdida não deve rodar de madrugada sobre preço
       velho, mas relatório perdido ainda vale, porque descreve um dia que já
       aconteceu
-- [ ] **`OPLAB_TOKEN` é exigido por `config.py` mas o provedor foi
-      abandonado.** Só `etl/fetch_options.py` (a versão OpLab, nunca migrada
-      para a Brapi) o consome, e mesmo assim ele está na lista obrigatória de
-      `Settings.load()` — sem a variável, a API, o pipeline e o bootstrap
-      recusam a subir. Bateu de verdade em 2026-08-16, quando o `.env` ficou
-      sem ela. Tirar da lista obrigatória é uma linha; fica anotado porque é
-      mudança de comportamento, não limpeza
-- [ ] **Nenhuma chamada real à Messages API foi feita** — `ANTHROPIC_API_KEY`
-      não está configurada e o CLI `ant` não está instalado. Toda a MONTAGEM
-      é testada sem chave; a viagem até a API, não. O critério de pronto da
-      Fase 3 ("buscar uma notícia real e citar a fonte") só fecha rodando
-      `python -m src.agente.verificar` com a chave no ambiente
+- [x] **Entrega determinística e alerta independente**: `src/agente/notificar.py`
+      envia o relatório por SMTP depois de ele ser gravado, sem dar ferramenta
+      de envio ao modelo; `scripts/alertar_pregao.py` +
+      `opcoes-ia-alerta.timer` alertam ausência, falha, órfão ou banco fora do
+      ar por caminho separado. Sem SMTP configurado, ambos deixam erro
+      explícito no journal
+- [x] **`OPLAB_TOKEN` deixou de ser obrigatório por `config.py`**: o provedor
+      foi abandonado e só a implementação legada de `fetch_options.py` o
+      consome. Se esse ETL for invocado sem token, falha explicitamente; API,
+      pipeline e bootstrap não são mais bloqueados por uma integração fora de
+      uso
+- [x] **Messages API validada em runtime Fargate** em 2026-08-17: a etapa
+      `relatorio_anthropic` da execução diária
+      `73c34ae4-aa50-4db7-a882-861d793da7dc` recebeu HTTP 200 e persistiu o
+      relatório no Neon. Isso valida a viagem da composição diária; o CLI
+      isolado `src.agente.verificar` continua útil para exercitar busca/citação
+- [x] **Infraestrutura híbrida serverless provisionada** em `sa-east-1`:
+      Lambda/API Gateway, Cognito, ECR, Fargate, EventBridge, CloudWatch,
+      SNS/Budget, Secrets Manager, frontend S3 privado/CloudFront e state S3.
+      Smokes reais de Lambda,
+      `intraday`, `daily` e `alert` foram executados em 2026-08-17; schedules
+      permanecem `DISABLED`. Ver `docs/RUNBOOK-CLOUD.md`
+- [ ] **Cutover serverless ainda bloqueado por ações externas**: quota Lambda
+      aplicada e 10 (pedido 1001 pendente, necessario para reserved concurrency
+      2), SMTP não está configurado e ainda falta observar uma rodada agendada
+      completa. Frontend CloudFront, subscription SNS e login Cognito/PKCE foram
+      validados. EventBridge não deve ser habilitado antes dos gates; timers
+      systemd permanecem apenas como fallback
+- [ ] **Scan da imagem operacional tem risco residual sem correção**: a base
+      Trixie atual reduziu para 4 CRITICAL e 8 HIGH, todos sem
+      `fixed_in_version` no ECR em 2026-08-17. O release bloqueia severidade
+      corrigível e reporta unfixed, alinhado ao `ignore-unfixed` do Trivy
 - [ ] **`prob_exercicio_vencimento` não inclui exercício antecipado** — mede
       só o vencimento. Para quem vende call coberta num contrato americano, a
       pergunta real é maior que essa. Sai como ressalva em toda linha

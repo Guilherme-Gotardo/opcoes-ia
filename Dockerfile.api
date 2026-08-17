@@ -1,0 +1,32 @@
+# syntax=docker/dockerfile:1
+# Manifest linux/amd64 de public.ecr.aws/lambda/python:3.12, fixado em 2026-08-17.
+ARG LAMBDA_BASE=public.ecr.aws/lambda/python:3.12@sha256:f2a0c345526320ebce34dbf895de8ee133d67bc2b0ac0ab9410f30f993023641
+
+FROM --platform=linux/amd64 ${LAMBDA_BASE} AS build
+
+COPY requirements/api.lock /tmp/api.lock
+RUN python -m pip install \
+    --disable-pip-version-check \
+    --no-cache-dir \
+    --require-hashes \
+    --target /asset \
+    -r /tmp/api.lock
+
+COPY src /asset/src
+COPY skills /asset/skills
+COPY scripts/container_smoke.py /tmp/container_smoke.py
+WORKDIR /asset
+RUN OPCOES_IA_ENV=prod \
+    OPCOES_IA_WEB_ORIGIN=https://d123example.cloudfront.net \
+    COGNITO_ISSUER=https://cognito-idp.sa-east-1.amazonaws.com/sa-east-1_container \
+    COGNITO_CLIENT_ID=container-smoke \
+    COGNITO_REQUIRED_SCOPE=opcoes-ia/api \
+    PYTHONPATH=/asset \
+    python /tmp/container_smoke.py api
+
+FROM --platform=linux/amd64 ${LAMBDA_BASE} AS runtime
+
+COPY --from=build /asset ${LAMBDA_TASK_ROOT}
+WORKDIR ${LAMBDA_TASK_ROOT}
+
+CMD ["src.api.lambda_handler.handler"]

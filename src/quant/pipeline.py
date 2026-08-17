@@ -187,7 +187,10 @@ def gravar(cur, executado_em: dt.datetime, ticker: str, codigo: str,
     )
 
 
-def enriquecer_avaliacoes(cur, executado_em: dt.datetime, resultados: Sequence) -> int:
+def enriquecer_avaliacoes(
+    cur, executado_em: dt.datetime, resultados: Sequence, *,
+    propagar_erro: bool = False,
+) -> int:
     """Enriquece toda opção avaliada e grava. Devolve quantas linhas gravou.
 
     TODA opção, elegível ou não: o contexto é justamente o que mostra quão
@@ -204,6 +207,8 @@ def enriquecer_avaliacoes(cur, executado_em: dt.datetime, resultados: Sequence) 
         params = carregar_modelo()
     except Exception as e:  # noqa: BLE001 — configuração ruim não derruba avaliação
         log.warning("Enriquecimento pulado: modelo.yaml inválido (%s)", e)
+        if propagar_erro:
+            raise
         return 0
 
     hoje = executado_em.date()
@@ -252,9 +257,13 @@ def enriquecer_avaliacoes(cur, executado_em: dt.datetime, resultados: Sequence) 
         except ModeloIndisponivel as e:
             # Uma vez basta: sem QuantLib nenhuma opção vai enriquecer.
             log.warning("Enriquecimento indisponível: %s", e)
+            if propagar_erro:
+                raise
             return gravadas
         except Exception:  # noqa: BLE001
             log.exception("Falha ao enriquecer %s — seguindo com as demais", codigo)
+            if propagar_erro:
+                raise
 
     if gravadas:
         log.info(
@@ -265,7 +274,10 @@ def enriquecer_avaliacoes(cur, executado_em: dt.datetime, resultados: Sequence) 
     return gravadas
 
 
-def enriquecer_execucao(executado_em: dt.datetime, resultados: Sequence) -> int:
+def enriquecer_execucao(
+    executado_em: dt.datetime, resultados: Sequence, *,
+    propagar_erro: bool = False,
+) -> int:
     """Enriquece uma execução em TRANSAÇÃO PRÓPRIA, depois do commit da
     avaliação.
 
@@ -290,9 +302,13 @@ def enriquecer_execucao(executado_em: dt.datetime, resultados: Sequence) -> int:
                     "`python -m src.db.bootstrap`)."
                 )
                 return 0
-            gravadas = enriquecer_avaliacoes(cur, executado_em, resultados)
+            gravadas = enriquecer_avaliacoes(
+                cur, executado_em, resultados, propagar_erro=propagar_erro,
+            )
             conn.commit()
             return gravadas
-    except Exception:  # noqa: BLE001 — nunca derruba a avaliação
+    except Exception:  # noqa: BLE001 — compatibilidade mantém modo tolerante
         log.exception("Enriquecimento quantitativo falhou por inteiro.")
+        if propagar_erro:
+            raise
         return 0

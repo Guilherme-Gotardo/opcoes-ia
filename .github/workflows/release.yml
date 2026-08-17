@@ -1,0 +1,250 @@
+name: Release production
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-prod
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: sa-east-1
+  API_REPOSITORY: opcoes-ia-prod-api
+  OPERATIONS_REPOSITORY: opcoes-ia-prod-operations
+  RELEASE_TAG: release-${{ github.sha }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: opcoes_ia
+          POSTGRES_USER: opcoes_ia
+          POSTGRES_PASSWORD: opcoes_ia
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U opcoes_ia -d opcoes_ia"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://opcoes_ia:opcoes_ia@localhost:5433/opcoes_ia
+      BRAPI_TOKEN: release-validation-not-a-production-token
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements/dev.lock
+      - name: Install locked dependencies
+        run: python -m pip install --require-hashes -r requirements/dev.lock
+      - name: Bootstrap disposable Postgres
+        run: python -m src.db.bootstrap
+      - name: Run complete suite
+        run: pytest -q
+
+  registry:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: Principal
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::351093152305:role/opcoes-ia-prod-github-deploy
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Ensure first-release ECR and secret containers exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          zero="sha256:$(printf '0%.0s' {1..64})"
+          terraform -chdir=infra/environments/prod init -backend-config=backend.hcl
+          terraform -chdir=infra/environments/prod apply -auto-approve -input=false \
+            -target=module.ecr -target=module.runtime_containers \
+            -var="api_image_digest=$zero" \
+            -var="operations_image_digest=$zero"
+
+  publish:
+    needs: registry
+    runs-on: ubuntu-latest
+    environment: Principal
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      api_digest: ${{ steps.digests.outputs.api_digest }}
+      operations_digest: ${{ steps.digests.outputs.operations_digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::351093152305:role/opcoes-ia-prod-github-publish
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - name: Detect an already-published immutable release
+        id: existing
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="$(aws ecr describe-images --repository-name "$API_REPOSITORY" --image-ids imageTag="$RELEASE_TAG" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
+          operations="$(aws ecr describe-images --repository-name "$OPERATIONS_REPOSITORY" --image-ids imageTag="$RELEASE_TAG" --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
+          if [[ -n "$api" && "$api" != "None" && -n "$operations" && "$operations" != "None" ]]; then
+            echo "reuse=true" >> "$GITHUB_OUTPUT"
+          elif [[ -n "$api" && "$api" != "None" ]] || [[ -n "$operations" && "$operations" != "None" ]]; then
+            echo "Partial immutable release exists; refusing rebuild." >&2
+            exit 1
+          else
+            echo "reuse=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build API image once
+        if: steps.existing.outputs.reuse != 'true'
+        run: docker build --platform linux/amd64 --file Dockerfile.api --tag "$API_REPOSITORY:$RELEASE_TAG" .
+      - name: Build operations image once
+        if: steps.existing.outputs.reuse != 'true'
+        run: docker build --platform linux/amd64 --file Dockerfile.operations --tag "$OPERATIONS_REPOSITORY:$RELEASE_TAG" .
+      - name: Scan API image before publication
+        if: steps.existing.outputs.reuse != 'true'
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: opcoes-ia-prod-api:${{ env.RELEASE_TAG }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Scan operations image before publication
+        if: steps.existing.outputs.reuse != 'true'
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: opcoes-ia-prod-operations:${{ env.RELEASE_TAG }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Push the two tested images once
+        if: steps.existing.outputs.reuse != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          registry="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${AWS_REGION}.amazonaws.com"
+          docker tag "$API_REPOSITORY:$RELEASE_TAG" "$registry/$API_REPOSITORY:$RELEASE_TAG"
+          docker tag "$OPERATIONS_REPOSITORY:$RELEASE_TAG" "$registry/$OPERATIONS_REPOSITORY:$RELEASE_TAG"
+          docker push "$registry/$API_REPOSITORY:$RELEASE_TAG"
+          docker push "$registry/$OPERATIONS_REPOSITORY:$RELEASE_TAG"
+      - name: Wait for ECR scan and reject findings
+        shell: bash
+        run: |
+          set -euo pipefail
+          for repository in "$API_REPOSITORY" "$OPERATIONS_REPOSITORY"; do
+            aws ecr wait image-scan-complete --repository-name "$repository" --image-id imageTag="$RELEASE_TAG"
+            findings="$(aws ecr describe-image-scan-findings --repository-name "$repository" --image-id imageTag="$RELEASE_TAG" --output json)"
+            blocking="$(jq '[.imageScanFindings.findings[]? | select(
+              (.severity == "CRITICAL" or .severity == "HIGH") and
+              any(.attributes[]?; .key == "fixed_in_version" and .value != "" and .value != "None")
+            )] | length' <<< "$findings")"
+            unfixed="$(jq '[.imageScanFindings.findings[]? | select(
+              (.severity == "CRITICAL" or .severity == "HIGH") and
+              (any(.attributes[]?; .key == "fixed_in_version" and .value != "" and .value != "None") | not)
+            )] | length' <<< "$findings")"
+            echo "$repository scan: blocking=$blocking unfixed=$unfixed"
+            if (( blocking > 0 )); then
+              echo "$repository scan found $blocking fixable CRITICAL/HIGH vulnerabilities" >&2
+              exit 1
+            fi
+          done
+      - name: Resolve immutable digests
+        id: digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="$(aws ecr describe-images --repository-name "$API_REPOSITORY" --image-ids imageTag="$RELEASE_TAG" --query 'imageDetails[0].imageDigest' --output text)"
+          operations="$(aws ecr describe-images --repository-name "$OPERATIONS_REPOSITORY" --image-ids imageTag="$RELEASE_TAG" --query 'imageDetails[0].imageDigest' --output text)"
+          echo "api_digest=$api" >> "$GITHUB_OUTPUT"
+          echo "operations_digest=$operations" >> "$GITHUB_OUTPUT"
+
+  migrate:
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: Principal
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      DATABASE_URL: ${{ secrets.NEON_DIRECT_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements/api.lock
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::351093152305:role/opcoes-ia-prod-github-migration
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Install locked migration dependencies
+        run: python -m pip install --require-hashes -r requirements/api.lock
+      - name: Apply schema and migrations under database advisory lock
+        run: python -m src.db.bootstrap
+
+  deploy:
+    needs: [publish, migrate]
+    runs-on: ubuntu-latest
+    environment: Principal
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::351093152305:role/opcoes-ia-prod-github-deploy
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Require populated runtime containers without reading values
+        shell: bash
+        run: |
+          set -euo pipefail
+          for secret_id in opcoes-ia/prod/api opcoes-ia/prod/operations; do
+            current="$(aws secretsmanager list-secret-version-ids --secret-id "$secret_id" --query 'length(Versions[?contains(VersionStages, `AWSCURRENT`)])' --output text)"
+            if [[ "$current" != "1" ]]; then
+              echo "$secret_id has no AWSCURRENT version; populate it out of band and rerun this release." >&2
+              exit 1
+            fi
+          done
+      - name: Plan exact tested digests
+        run: |
+          terraform -chdir=infra/environments/prod init -backend-config=backend.hcl
+          terraform -chdir=infra/environments/prod plan -input=false -lock-timeout=5m \
+            -var="api_image_digest=${{ needs.publish.outputs.api_digest }}" \
+            -var="operations_image_digest=${{ needs.publish.outputs.operations_digest }}" \
+            -out=tfplan
+      - name: Deploy reviewed artifact set without rebuild
+        run: terraform -chdir=infra/environments/prod apply -input=false tfplan
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements/api.lock
+      - name: Export versioned OpenAPI contract
+        run: |
+          python -m pip install --require-hashes -r requirements/api.lock
+          python -m src.api --schema "openapi-${GITHUB_SHA}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openapi-${{ github.sha }}
+          path: openapi-${{ github.sha }}.json
+          if-no-files-found: error
+          retention-days: 30

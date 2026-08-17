@@ -329,15 +329,27 @@ CREATE INDEX IF NOT EXISTS idx_caixa_ocorrido
 -- NULL é um processo que morreu no meio — o rastro de "crashou".
 CREATE TABLE IF NOT EXISTS execucao_pipeline (
     id              BIGSERIAL PRIMARY KEY,
+    execution_id    UUID NOT NULL DEFAULT gen_random_uuid(),
+    ambiente        VARCHAR(30) NOT NULL,
+    tipo_fluxo      VARCHAR(30) NOT NULL,
+    janela_logica   VARCHAR(120) NOT NULL,
     iniciado_em     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    heartbeat_em    TIMESTAMPTZ NOT NULL DEFAULT now(),
     encerrado_em    TIMESTAMPTZ,
     -- 30, não 20: 'pulado_fora_de_pregao' tem 21 caracteres (ver migração).
     status          VARCHAR(30) NOT NULL,
     gatilho         VARCHAR(30) NOT NULL DEFAULT 'manual',
     detalhe         JSONB,
+    erro_sanitizado TEXT,
 
+    CONSTRAINT execucao_pipeline_execution_id_unico UNIQUE (execution_id),
+    CONSTRAINT execucao_pipeline_janela_unica
+        UNIQUE (ambiente, tipo_fluxo, janela_logica),
     CONSTRAINT execucao_pipeline_status_valido CHECK (
-        status IN ('executando', 'executado', 'pulado_fora_de_pregao', 'falhou')
+        status IN (
+            'executando', 'executado', 'parcial', 'pulado',
+            'pulado_fora_de_pregao', 'falhou', 'orfa'
+        )
     )
 );
 
@@ -399,3 +411,96 @@ CREATE INDEX IF NOT EXISTS idx_enriquecimento_execucao
 -- "Como esta opção evoluiu" — série histórica de uma opção específica.
 CREATE INDEX IF NOT EXISTS idx_enriquecimento_opcao
     ON enriquecimento_quant (codigo_opcao, executado_em DESC);
+
+-- Estado operacional introduzido pela migração 010. As FKs para
+-- `execucao_pipeline(execution_id)` são adicionadas pela migração: num banco
+-- antigo, schema.sql roda antes do ALTER que cria essa coluna.
+CREATE TABLE IF NOT EXISTS execucao_etapa_tentativa (
+    id                  BIGSERIAL PRIMARY KEY,
+    execution_id        UUID NOT NULL,
+    etapa               VARCHAR(60) NOT NULL,
+    tentativa           INTEGER NOT NULL,
+    status              VARCHAR(20) NOT NULL,
+    iniciado_em         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    encerrado_em        TIMESTAMPTZ,
+    alvos_tentados      INTEGER NOT NULL DEFAULT 0,
+    alvos_persistidos   INTEGER NOT NULL DEFAULT 0,
+    alvos_falhos        INTEGER NOT NULL DEFAULT 0,
+    alvos_nao_executados INTEGER NOT NULL DEFAULT 0,
+    detalhe             JSONB NOT NULL DEFAULT '{}'::jsonb,
+    erro_sanitizado     TEXT,
+
+    CONSTRAINT execucao_etapa_tentativa_unica
+        UNIQUE (execution_id, etapa, tentativa),
+    CONSTRAINT execucao_etapa_tentativa_positiva CHECK (tentativa > 0),
+    CONSTRAINT execucao_etapa_status_valido CHECK (
+        status IN ('executando', 'sucesso', 'parcial', 'falha', 'bloqueado', 'pulado')
+    ),
+    CONSTRAINT execucao_etapa_contagens_validas CHECK (
+        alvos_tentados >= 0 AND alvos_persistidos >= 0
+        AND alvos_falhos >= 0 AND alvos_nao_executados >= 0
+    ),
+    CONSTRAINT execucao_etapa_timestamps_validos CHECK (
+        (status = 'executando' AND encerrado_em IS NULL)
+        OR (status <> 'executando' AND encerrado_em IS NOT NULL)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_execucao_etapa_execucao
+    ON execucao_etapa_tentativa (execution_id, iniciado_em);
+
+CREATE TABLE IF NOT EXISTS relatorios_deterministicos (
+    id              BIGSERIAL PRIMARY KEY,
+    execution_id    UUID NOT NULL,
+    data            DATE NOT NULL,
+    conteudo        TEXT NOT NULL,
+    formato         VARCHAR(20) NOT NULL DEFAULT 'markdown',
+    gerado_em       TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT relatorios_deterministicos_execucao_unica UNIQUE (execution_id),
+    CONSTRAINT relatorios_deterministicos_formato_valido CHECK (formato IN ('markdown'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_relatorios_deterministicos_data
+    ON relatorios_deterministicos (data DESC, gerado_em DESC);
+
+CREATE TABLE IF NOT EXISTS relatorios_agente (
+    id              BIGSERIAL PRIMARY KEY,
+    execution_id    UUID,
+    data            DATE NOT NULL,
+    gerado_em       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    texto           TEXT NOT NULL,
+    modelo          VARCHAR(40) NOT NULL,
+    fontes          JSONB NOT NULL DEFAULT '[]'::jsonb,
+    buscas          INTEGER NOT NULL DEFAULT 0,
+    tokens_entrada  INTEGER,
+    tokens_saida    INTEGER,
+    insumo_resumo   JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_relatorios_agente_data
+    ON relatorios_agente (data DESC, gerado_em DESC);
+
+CREATE TABLE IF NOT EXISTS notificacoes_relatorio (
+    id                  BIGSERIAL PRIMARY KEY,
+    execution_id        UUID NOT NULL,
+    relatorio_agente_id BIGINT NOT NULL,
+    canal               VARCHAR(30) NOT NULL,
+    status              VARCHAR(20) NOT NULL,
+    reservado_em        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    concluido_em        TIMESTAMPTZ,
+    detalhe             JSONB NOT NULL DEFAULT '{}'::jsonb,
+    erro_sanitizado     TEXT,
+
+    CONSTRAINT notificacoes_relatorio_unica UNIQUE (relatorio_agente_id, canal),
+    CONSTRAINT notificacoes_relatorio_status_valido CHECK (
+        status IN ('reservada', 'enviada', 'falhou')
+    ),
+    CONSTRAINT notificacoes_relatorio_timestamps_validos CHECK (
+        (status = 'reservada' AND concluido_em IS NULL)
+        OR (status <> 'reservada' AND concluido_em IS NOT NULL)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_notificacoes_relatorio_execucao
+    ON notificacoes_relatorio (execution_id, reservado_em DESC);

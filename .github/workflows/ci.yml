@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: opcoes_ia
+          POSTGRES_USER: opcoes_ia
+          POSTGRES_PASSWORD: opcoes_ia
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U opcoes_ia -d opcoes_ia"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://opcoes_ia:opcoes_ia@localhost:5433/opcoes_ia
+      BRAPI_TOKEN: ci-not-a-production-token
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements/dev.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+
+      - name: Install locked development dependencies
+        run: python -m pip install --require-hashes -r requirements/dev.lock
+      - name: Install pinned OpenSpec CLI
+        run: npm install --global @fission-ai/openspec@1.9.0
+      - name: Bootstrap disposable Postgres
+        run: python -m src.db.bootstrap
+      - name: Run complete test suite
+        run: pytest -q
+      - name: Strictly validate active OpenSpec changes
+        run: openspec validate --all --strict
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive infra
+      - name: Validate bootstrap without remote backend
+        run: terraform -chdir=infra/bootstrap init -backend=false && terraform -chdir=infra/bootstrap validate
+      - name: Validate production without remote backend
+        run: terraform -chdir=infra/environments/prod init -backend=false && terraform -chdir=infra/environments/prod validate
+      - name: Check IAM and infrastructure guardrails
+        run: python scripts/check_terraform.py
+      - name: Run Checkov Terraform analysis
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infra
+          framework: terraform
+          quiet: true
+          soft_fail: false
+
+      - name: Build API image once locally
+        run: docker build --platform linux/amd64 --file Dockerfile.api --tag opcoes-ia-api:ci .
+      - name: Build operations image once locally
+        run: docker build --platform linux/amd64 --file Dockerfile.operations --tag opcoes-ia-operations:ci .
+      - name: Scan API image
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: opcoes-ia-api:ci
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Scan operations image
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: opcoes-ia-operations:ci
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"

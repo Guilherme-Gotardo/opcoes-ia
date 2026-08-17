@@ -444,7 +444,7 @@ def _dispatch_saude(cotacoes=(), opcoes=(), noticias=(), earnings=(),
 @contextmanager
 def _orcamento_de(limite):
     from types import SimpleNamespace
-    with patch.object(api_app, "get_settings",
+    with patch.object(api_app, "get_brapi_settings",
                       return_value=SimpleNamespace(brapi_requests_dia_maximo=limite)):
         yield
 

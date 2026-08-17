@@ -11,6 +11,7 @@ resultado próximo".
 import datetime as dt
 import logging
 from collections import defaultdict
+from dataclasses import dataclass
 
 from src.earnings.models import (
     EarningsEvent,
@@ -21,9 +22,32 @@ from src.earnings.models import (
 from src.earnings.providers.base import EarningsProvider, ProviderIndisponivel
 from src.earnings.repository import EarningsEventRepository
 from src.earnings.resolution import aplicar, resolver
+from src.etl.result import DetalheAlvo, EstadoAlvo, ResultadoColeta
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
+
+CODIGO_UNIVERSO_VAZIO = "universo_vazio"
+CODIGO_PROVIDER_INDISPONIVEL = "provider_indisponivel"
+CODIGO_ERRO_PROVIDER = "erro_provider"
+CODIGO_SEM_AFIRMACOES = "sem_afirmacoes"
+CODIGO_NENHUM_PROVIDER = "nenhum_provider_configurado"
+
+
+@dataclass(frozen=True)
+class ColetaEarnings:
+    """Afirmações e desfecho operacional de uma única consulta às fontes.
+
+    Providers de earnings recebem o universo em lote e não informam se a
+    exceção ocorreu para um ticker específico. Por isso os resultados usam
+    alvos ``fonte:<provider>``: replicar a falha para cada ticker inventaria
+    uma granularidade que o contrato do provider não oferece.
+    """
+
+    afirmacoes: dict[str, list[EarningsEventSource]]
+    falhas: dict[str, Exception]
+    resultados_por_provider: tuple[ResultadoColeta, ...]
+    resultado: ResultadoColeta
 
 
 class EarningsEventService:
@@ -47,19 +71,107 @@ class EarningsEventService:
         falharam simplesmente não contribuem — e o motivo vai para o log,
         porque "não sabemos" precisa ser distinguível de "não há evento".
         """
+        return self.coletar_com_resultado(tickers).afirmacoes
+
+    def coletar_com_resultado(self, tickers: list[str]) -> ColetaEarnings:
+        """Consulta cada provider uma vez e preserva sucessos e exceções.
+
+        Diferente do contrato legado de :meth:`coletar`, uma lista vazia de
+        uma fonte continua registrada como sucesso e uma exceção fica
+        disponível ao orquestrador com código estável. Universo vazio é
+        ``pulado`` antes de qualquer chamada externa.
+        """
+        if not tickers:
+            resultados = tuple(
+                ResultadoColeta.pulado(
+                    "earnings", provider.name, CODIGO_UNIVERSO_VAZIO
+                )
+                for provider in self.providers
+            )
+            return ColetaEarnings(
+                afirmacoes={},
+                falhas={},
+                resultados_por_provider=resultados,
+                resultado=ResultadoColeta.pulado(
+                    "earnings", "providers", CODIGO_UNIVERSO_VAZIO
+                ),
+            )
+
         coletado: dict[str, list[EarningsEventSource]] = {}
+        falhas: dict[str, Exception] = {}
+        resultados: list[ResultadoColeta] = []
+        detalhes_agregados: list[DetalheAlvo] = []
         for provider in self.providers:
             try:
-                fontes = provider.get_upcoming_earnings(tickers)
+                fontes = list(provider.get_upcoming_earnings(tickers))
             except ProviderIndisponivel as exc:
                 log.warning("Provider %s indisponível: %s", provider.name, exc)
-                continue
+                codigo = CODIGO_PROVIDER_INDISPONIVEL
+                erro = exc
             except Exception as exc:  # noqa: BLE001 — isolamento proposital
                 log.error("Provider %s falhou: %s", provider.name, exc)
+                codigo = CODIGO_ERRO_PROVIDER
+                erro = exc
+            else:
+                coletado[provider.name] = fontes
+                detalhe = DetalheAlvo(
+                    ticker=f"fonte:{provider.name}",
+                    estado=EstadoAlvo.SUCESSO,
+                    codigo_motivo=CODIGO_SEM_AFIRMACOES if not fontes else None,
+                    detalhe=(
+                        "provider respondeu sem afirmações"
+                        if not fontes else None
+                    ),
+                )
+                contexto = {
+                    "granularidade_alvo": "fonte",
+                    "afirmacoes_coletadas": len(fontes),
+                }
+                resultados.append(ResultadoColeta.de_detalhes(
+                    "earnings", provider.name, [detalhe], contexto=contexto
+                ))
+                detalhes_agregados.append(detalhe)
+                log.info("Provider %s: %d evento(s).", provider.name, len(fontes))
                 continue
-            coletado[provider.name] = fontes
-            log.info("Provider %s: %d evento(s).", provider.name, len(fontes))
-        return coletado
+
+            falhas[provider.name] = erro
+            detalhe = DetalheAlvo(
+                ticker=f"fonte:{provider.name}",
+                estado=EstadoAlvo.FALHA,
+                codigo_motivo=codigo,
+                detalhe=str(erro),
+            )
+            resultados.append(ResultadoColeta.de_detalhes(
+                "earnings",
+                provider.name,
+                [detalhe],
+                contexto={"granularidade_alvo": "fonte"},
+            ))
+            detalhes_agregados.append(detalhe)
+
+        if detalhes_agregados:
+            resultado_agregado = ResultadoColeta.de_detalhes(
+                "earnings",
+                "providers",
+                detalhes_agregados,
+                contexto={
+                    "granularidade_alvo": "fonte",
+                    "afirmacoes_por_provider": {
+                        nome: len(fontes) for nome, fontes in coletado.items()
+                    },
+                },
+            )
+        else:
+            resultado_agregado = ResultadoColeta.pulado(
+                "earnings", "providers", CODIGO_NENHUM_PROVIDER
+            )
+
+        return ColetaEarnings(
+            afirmacoes=coletado,
+            falhas=falhas,
+            resultados_por_provider=tuple(resultados),
+            resultado=resultado_agregado,
+        )
 
     def _agrupar(
         self, coletado: dict[str, list[EarningsEventSource]], tickers: list[str]
@@ -101,7 +213,9 @@ class EarningsEventService:
         self,
         tickers: list[str],
         agora: dt.datetime | None = None,
-        coletado: dict[str, list[EarningsEventSource]] | None = None,
+        coletado: (
+            dict[str, list[EarningsEventSource]] | ColetaEarnings | None
+        ) = None,
     ) -> list[EarningsEvent]:
         """Ciclo completo: coleta → resolve → persiste.
 
@@ -117,6 +231,8 @@ class EarningsEventService:
         agora = agora or dt.datetime.now(dt.timezone.utc)
         if coletado is None:
             coletado = self.coletar(tickers)
+        elif isinstance(coletado, ColetaEarnings):
+            coletado = coletado.afirmacoes
         grupos = self._agrupar(coletado, tickers)
 
         atualizados: list[EarningsEvent] = []

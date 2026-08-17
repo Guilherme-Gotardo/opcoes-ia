@@ -1,7 +1,8 @@
 # O agente de relatório (Fases 3 e 4)
 
 Compõe o relatório do dia a partir do que os módulos determinísticos
-apuraram, e o entrega em `reports/` e na tela.
+apuraram, e o entrega em `reports/`, no banco, na tela e opcionalmente por
+e-mail.
 
 ```bash
 python -m src.agente.ferramentas   # mostra as ferramentas (sem token)
@@ -70,6 +71,13 @@ cp deploy/systemd/opcoes-ia-relatorio.{service,timer} ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now opcoes-ia-relatorio.timer
 ```
+
+Para entrega por e-mail, acrescente `SMTP_HOST`, `SMTP_TO` e, se necessário,
+`SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` e `SMTP_STARTTLS` ao
+`~/.config/opcoes-ia/env`. O envio é feito por `src/agente/notificar.py`,
+depois que o script grava o relatório; o modelo não recebe ferramenta de
+notificação. Sem SMTP, arquivo, banco e interface continuam disponíveis e o
+journal registra que a entrega externa está desativada.
 
 ## Entrega
 

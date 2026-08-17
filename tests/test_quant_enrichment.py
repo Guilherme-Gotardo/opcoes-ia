@@ -247,11 +247,8 @@ def test_enriquecimento_vazio_e_o_default_do_dataclass():
 def test_motor_de_decisao_nao_depende_do_modelo_quantitativo():
     """A garantia central do plano, verificada em vez de prometida.
 
-    `strategy/covered.py` não pode importar `src.quant` no topo. Se
-    importasse, um `modelo.yaml` quebrado ou uma QuantLib ausente derrubariam
-    a AVALIAÇÃO no import — e o enriquecimento deixaria de ser opcional sem
-    ninguém decidir isso. O único import permitido é o adiado, dentro da
-    função, depois do commit da decisão.
+    `strategy/covered.py` não pode importar `src.quant`. O orquestrador chama
+    o enriquecimento como outra etapa, depois do commit da avaliação.
     """
     import ast
     from pathlib import Path
@@ -273,10 +270,9 @@ def test_motor_de_decisao_nao_depende_do_modelo_quantitativo():
     ]
     assert not any(n.startswith("src.quant") for n in topo), (
         f"covered.py importa src.quant no topo do módulo: {topo}. "
-        "O import tem que ser adiado, para o enriquecimento seguir opcional."
+        "O enriquecimento pertence ao orquestrador, fora do motor de decisão."
     )
-    # ...e o adiado precisa existir, senão o enriquecimento nunca roda.
-    assert "from src.quant.pipeline import enriquecer_execucao" in fonte
+    assert "src.quant" not in fonte
 
 
 def test_modelo_do_repositorio_carrega_e_e_coerente():

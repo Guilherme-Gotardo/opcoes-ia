@@ -100,7 +100,16 @@ def executar(
     )
 
     servico = servico or EarningsEventService(providers=providers)
-    coletado = servico.coletar(tickers)
+    # O contrato estruturado preserva inclusive sucesso vazio e a exceção de
+    # cada provider. O fallback mantém compatibilidade com dublês e clientes
+    # antigos que implementam somente `coletar()`.
+    coletar_com_resultado = getattr(servico, "coletar_com_resultado", None)
+    if coletar_com_resultado is None:
+        coleta = None
+        coletado = servico.coletar(tickers)
+    else:
+        coleta = coletar_com_resultado(tickers)
+        coletado = coleta.afirmacoes
 
     responderam = [nome for nome in pedidas if nome in coletado]
     falharam = [nome for nome in pedidas if nome not in coletado]
@@ -108,10 +117,9 @@ def executar(
     for nome in responderam:
         print(f"  {nome}: {len(coletado[nome])} afirmação(ões).")
     for nome in falharam:
-        # O motivo detalhado já foi para o log por `service.coletar`, que
-        # isola a falha. Aqui o ponto é o operador ver QUE falhou: silêncio
-        # de fonte não pode ser lido como ausência de evento.
-        print(f"  {nome}: FALHOU — não foi possível consultar (ver log acima).")
+        motivo = coleta.falhas.get(nome) if coleta is not None else None
+        complemento = f": {motivo}" if motivo is not None else " (ver log acima)"
+        print(f"  {nome}: FALHOU — não foi possível consultar{complemento}.")
 
     if not responderam:
         print(

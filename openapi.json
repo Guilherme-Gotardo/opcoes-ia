@@ -29,7 +29,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -69,7 +74,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       }
     },
     "/posicoes": {
@@ -95,7 +105,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -135,7 +150,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       }
     },
     "/posicoes/{posicao_id}/encerrar": {
@@ -181,7 +201,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       }
     },
     "/watchlist": {
@@ -203,7 +228,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -245,7 +275,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       }
     },
     "/watchlist/{ticker}/remover": {
@@ -281,7 +316,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       }
     },
     "/caixa": {
@@ -302,7 +342,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -344,7 +389,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       }
     },
     "/catalogo": {
@@ -391,7 +441,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       }
     },
     "/catalogo/{ticker}/cnpj": {
@@ -436,7 +491,68 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
+      }
+    },
+    "/health/live": {
+      "get": {
+        "tags": [
+          "saude"
+        ],
+        "summary": "Liveness do runtime",
+        "description": "Prova apenas que o processo HTTP responde; não abre conexão.",
+        "operationId": "health_live_health_live_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResposta"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "tags": [
+          "saude"
+        ],
+        "summary": "Disponibilidade do Neon",
+        "description": "Executa somente ``SELECT 1`` e distingue runtime vivo de Neon fora.",
+        "operationId": "health_ready_health_ready_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResposta"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResposta"
+                }
+              }
+            }
+          }
+        },
+        "security": []
       }
     },
     "/carteira": {
@@ -454,7 +570,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       }
     },
     "/cotacoes": {
@@ -477,7 +598,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       }
     },
     "/sugestoes": {
@@ -499,7 +625,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       }
     },
     "/desfecho": {
@@ -547,7 +678,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       }
     },
     "/resultados": {
@@ -566,7 +702,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       }
     },
     "/saude-coleta": {
@@ -585,7 +726,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       }
     },
     "/candles": {
@@ -645,7 +791,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       }
     },
     "/operacoes": {
@@ -664,7 +815,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       }
     },
     "/enriquecimento": {
@@ -683,7 +839,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       }
     },
     "/relatorio": {
@@ -702,7 +863,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       }
     },
     "/parametros": {
@@ -721,7 +887,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "CognitoAccessToken": []
+          }
+        ]
       }
     }
   },
@@ -1835,6 +2006,25 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "HealthResposta": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "disponivel | indisponivel"
+          },
+          "componente": {
+            "type": "string",
+            "title": "Componente"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "componente"
+        ],
+        "title": "HealthResposta"
+      },
       "InsumoResumoResposta": {
         "properties": {
           "sugestoes": {
@@ -2919,6 +3109,14 @@
         ],
         "title": "WatchlistResposta",
         "description": "A watchlist e o custo que ela impõe.\n\nO orçamento vem junto de propósito: vigiar não é de graça, e o número\nde vigiados é limitado por ele. Mostrar a lista sem mostrar o teto\ndeixaria o usuário descobrir o limite quando a coleta da carteira\nfalhasse no fim do dia."
+      }
+    },
+    "securitySchemes": {
+      "CognitoAccessToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Access token Cognito com o escopo configurado da API."
       }
     }
   }

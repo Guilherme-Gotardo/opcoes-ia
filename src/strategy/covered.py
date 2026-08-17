@@ -596,7 +596,9 @@ def _to_jsonb(d: dict):
     return json.dumps(d)
 
 
-def executar_avaliacao_carteira() -> list[ResultadoAvaliacao]:
+def executar_avaliacao_carteira(
+    executado_em: dt.datetime | None = None,
+) -> list[ResultadoAvaliacao]:
     """Avalia todas as posições de ação elegíveis para covered call contra
     as opções reais do banco, e persiste em `sugestoes` apenas as que
     passarem em todos os critérios. Retorna todos os resultados avaliados
@@ -616,7 +618,9 @@ def executar_avaliacao_carteira() -> list[ResultadoAvaliacao]:
     resultados: list[ResultadoAvaliacao] = []
     # Um timestamp para a execução inteira: é o que agrupa o desfecho e o que
     # distingue duas rodadas no mesmo dia.
-    executado_em = dt.datetime.now(dt.timezone.utc)
+    executado_em = executado_em or dt.datetime.now(dt.timezone.utc)
+    if executado_em.tzinfo is None:
+        raise ValueError("executado_em precisa ter fuso horário")
     hoje = executado_em.date()
     risco_svc = EarningsRiskService()
     repo_earnings = EarningsEventRepository()
@@ -694,17 +698,6 @@ def executar_avaliacao_carteira() -> list[ResultadoAvaliacao]:
         linhas_desfecho = agregar(resultados, tickers_sem_opcoes=sem_opcoes)
         gravar_desfecho(cur, executado_em, linhas_desfecho)
         conn.commit()
-
-    # --- contexto quantitativo: DEPOIS do commit, e fora dele ---
-    # Import adiado e transação própria pelo mesmo motivo: enriquecimento é
-    # opcional e não pode, em nenhuma hipótese, invalidar a decisão que já
-    # foi tomada e gravada acima. Importar no topo faria um `modelo.yaml`
-    # quebrado ou uma QuantLib ausente derrubarem a avaliação no import;
-    # gravar na mesma transação faria um erro de banco aqui levar embora as
-    # sugestões. Nenhum número daqui volta para `criterios_json`.
-    from src.quant.pipeline import enriquecer_execucao  # noqa: PLC0415
-
-    enriquecer_execucao(executado_em, resultados)
 
     n_sugeridas = sum(1 for r in resultados if r.elegivel)
     n_bloqueadas = sum(1 for r in resultados if r.bloqueado_por_resultado)

@@ -48,7 +48,7 @@ from src.assets.manage import (
 )
 from src.assets.catalogo import CatalogoIndisponivel, buscar, cnpj_raiz_de
 from src.caixa.manage import LancamentoInvalido, extrato, registrar, saldo
-from src.config import get_settings
+from src.config import get_brapi_settings
 from src.portfolio.manage import (
     PosicaoInvalida,
     add_posicao,
@@ -320,7 +320,7 @@ _REQUESTS_POR_TICKER_DIA = 4
 @router.get("/watchlist", response_model=WatchlistResposta)
 def listar_watchlist() -> WatchlistResposta:
     """Ativos vigiados e o custo que isso impõe ao orçamento diário."""
-    orcamento = get_settings().brapi_requests_dia_maximo
+    orcamento = get_brapi_settings().brapi_requests_dia_maximo
     return WatchlistResposta(
         vigiados=tickers_vigiados(),
         universo=universo_de_analise(),

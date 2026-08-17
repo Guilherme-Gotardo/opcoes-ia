@@ -30,9 +30,13 @@ cobertura.
 import datetime as dt
 import json
 import logging
-from typing import Any
+import os
+import uuid
+from dataclasses import dataclass
+from typing import Any, Mapping
 
 from src.db.connection import get_connection
+from src.observability.logging import sanitizar_texto
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -44,17 +48,390 @@ EXECUTANDO = "executando"
 EXECUTADO = "executado"
 PULADO = "pulado_fora_de_pregao"
 FALHOU = "falhou"
+PARCIAL = "parcial"
+PULADO_GERAL = "pulado"
+ORFA = "orfa"
 
-_FINAIS = (EXECUTADO, PULADO, FALHOU)
+_FINAIS = (EXECUTADO, PARCIAL, PULADO_GERAL, PULADO, FALHOU, ORFA)
+
+ETAPA_EXECUTANDO = "executando"
+ETAPA_SUCESSO = "sucesso"
+ETAPA_PARCIAL = "parcial"
+ETAPA_FALHA = "falha"
+ETAPA_BLOQUEADO = "bloqueado"
+ETAPA_PULADO = "pulado"
+_ETAPA_FINAIS = (
+    ETAPA_SUCESSO, ETAPA_PARCIAL, ETAPA_FALHA, ETAPA_BLOQUEADO, ETAPA_PULADO,
+)
+
+
+@dataclass(frozen=True)
+class RegistroExecucao:
+    id: int
+    execution_id: uuid.UUID
+    ambiente: str
+    tipo_fluxo: str
+    janela_logica: str
+    status: str
+    gatilho: str
+    iniciado_em: dt.datetime
+    heartbeat_em: dt.datetime
+    encerrado_em: dt.datetime | None
+    detalhe: dict[str, Any]
+    erro_sanitizado: str | None
+
+
+@dataclass(frozen=True)
+class AquisicaoExecucao:
+    execucao: RegistroExecucao
+    adquirida: bool
+
+    @property
+    def duplicada(self) -> bool:
+        return not self.adquirida
+
+
+@dataclass(frozen=True)
+class TentativaEtapa:
+    id: int
+    execution_id: uuid.UUID
+    etapa: str
+    tentativa: int
+    status: str
+    iniciado_em: dt.datetime
+    encerrado_em: dt.datetime | None
+    alvos_tentados: int
+    alvos_persistidos: int
+    alvos_falhos: int
+    alvos_nao_executados: int
+    detalhe: dict[str, Any]
+    erro_sanitizado: str | None
+
+
+_COLUNAS_EXECUCAO = (
+    "id, execution_id, ambiente, tipo_fluxo, janela_logica, status, gatilho, "
+    "iniciado_em, heartbeat_em, encerrado_em, detalhe, erro_sanitizado"
+)
+_COLUNAS_ETAPA = (
+    "id, execution_id, etapa, tentativa, status, iniciado_em, encerrado_em, "
+    "alvos_tentados, alvos_persistidos, alvos_falhos, alvos_nao_executados, "
+    "detalhe, erro_sanitizado"
+)
+
+
+def _json(valor: Any) -> str:
+    return json.dumps(valor, ensure_ascii=False, default=str)
+
+
+def _registro_execucao(row) -> RegistroExecucao:
+    detalhe = row[10]
+    if isinstance(detalhe, str):
+        detalhe = json.loads(detalhe)
+    return RegistroExecucao(
+        id=row[0], execution_id=row[1], ambiente=row[2], tipo_fluxo=row[3],
+        janela_logica=row[4], status=row[5], gatilho=row[6], iniciado_em=row[7],
+        heartbeat_em=row[8], encerrado_em=row[9], detalhe=detalhe or {},
+        erro_sanitizado=row[11],
+    )
+
+
+def _tentativa_etapa(row) -> TentativaEtapa:
+    detalhe = row[11]
+    if isinstance(detalhe, str):
+        detalhe = json.loads(detalhe)
+    return TentativaEtapa(
+        id=row[0], execution_id=row[1], etapa=row[2], tentativa=row[3],
+        status=row[4], iniciado_em=row[5], encerrado_em=row[6],
+        alvos_tentados=row[7], alvos_persistidos=row[8], alvos_falhos=row[9],
+        alvos_nao_executados=row[10], detalhe=detalhe or {},
+        erro_sanitizado=row[12],
+    )
+
+
+class RepositorioExecucao:
+    """Estado transacional de uma execução lógica e suas etapas."""
+
+    def adquirir(
+        self, ambiente: str, tipo_fluxo: str, janela_logica: str,
+        gatilho: str = "manual",
+    ) -> AquisicaoExecucao:
+        """Insere a chave lógica uma vez ou devolve a execução concorrente."""
+        if not ambiente or not tipo_fluxo or not janela_logica:
+            raise ValueError("ambiente, tipo_fluxo e janela_logica são obrigatórios")
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                INSERT INTO execucao_pipeline (
+                    ambiente, tipo_fluxo, janela_logica, status, gatilho
+                ) VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (ambiente, tipo_fluxo, janela_logica) DO NOTHING
+                RETURNING {_COLUNAS_EXECUCAO}
+                """,
+                (ambiente, tipo_fluxo, janela_logica, EXECUTANDO, gatilho),
+            )
+            row = cur.fetchone()
+            adquirida = row is not None
+            if row is None:
+                cur.execute(
+                    f"SELECT {_COLUNAS_EXECUCAO} FROM execucao_pipeline "
+                    "WHERE ambiente = %s AND tipo_fluxo = %s AND janela_logica = %s",
+                    (ambiente, tipo_fluxo, janela_logica),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        if row is None:  # pragma: no cover - a constraint garante a linha
+            raise RuntimeError("execução lógica não foi adquirida nem encontrada")
+        return AquisicaoExecucao(_registro_execucao(row), adquirida)
+
+    def obter(self, execution_id: uuid.UUID | str) -> RegistroExecucao | None:
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"SELECT {_COLUNAS_EXECUCAO} FROM execucao_pipeline "
+                "WHERE execution_id = %s",
+                (execution_id,),
+            )
+            row = cur.fetchone()
+        return _registro_execucao(row) if row else None
+
+    def obter_por_chave(
+        self, ambiente: str, tipo_fluxo: str, janela_logica: str,
+    ) -> RegistroExecucao | None:
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"SELECT {_COLUNAS_EXECUCAO} FROM execucao_pipeline "
+                "WHERE ambiente = %s AND tipo_fluxo = %s AND janela_logica = %s",
+                (ambiente, tipo_fluxo, janela_logica),
+            )
+            row = cur.fetchone()
+        return _registro_execucao(row) if row else None
+
+    def tentativas(
+        self, execution_id: uuid.UUID | str,
+    ) -> list[TentativaEtapa]:
+        """Histórico de etapas na ordem em que foram abertas."""
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"SELECT {_COLUNAS_ETAPA} FROM execucao_etapa_tentativa "
+                "WHERE execution_id = %s ORDER BY iniciado_em, id",
+                (execution_id,),
+            )
+            rows = cur.fetchall()
+        return [_tentativa_etapa(row) for row in rows]
+
+    def reativar(
+        self, execution_id: uuid.UUID | str, *, minutos_sem_heartbeat: int = 60,
+    ) -> RegistroExecucao:
+        """Retoma falha/parcial/órfã ou execução ativa com heartbeat expirado.
+
+        A condição fica no próprio UPDATE para dois operadores não retomarem a
+        mesma execução ao mesmo tempo. Uma execução ativa e recente continua
+        pertencendo ao processo original.
+        """
+        if minutos_sem_heartbeat <= 0:
+            raise ValueError("minutos_sem_heartbeat deve ser positivo")
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE execucao_pipeline
+                SET status = %s, encerrado_em = NULL, heartbeat_em = now(),
+                    erro_sanitizado = NULL,
+                    detalhe = detalhe || '{{"retomada": true}}'::jsonb
+                WHERE execution_id = %s
+                  AND (
+                    status IN (%s, %s, %s)
+                    OR (status = %s AND heartbeat_em <
+                        now() - make_interval(mins => %s))
+                  )
+                RETURNING {_COLUNAS_EXECUCAO}
+                """,
+                (EXECUTANDO, execution_id, FALHOU, ORFA, PARCIAL, EXECUTANDO,
+                 minutos_sem_heartbeat),
+            )
+            row = cur.fetchone()
+            conn.commit()
+        if row is None:
+            existente = self.obter(execution_id)
+            if existente is None:
+                raise ValueError("execução inexistente")
+            raise ValueError(
+                f"execução {existente.status!r} não pode ser retomada; "
+                "se ainda está ativa, aguarde o heartbeat expirar"
+            )
+        return _registro_execucao(row)
+
+    def heartbeat(self, execution_id: uuid.UUID | str) -> RegistroExecucao:
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE execucao_pipeline SET heartbeat_em = now() "
+                f"WHERE execution_id = %s AND status = %s RETURNING {_COLUNAS_EXECUCAO}",
+                (execution_id, EXECUTANDO),
+            )
+            row = cur.fetchone()
+            conn.commit()
+        if row is None:
+            raise ValueError("execução inexistente ou já encerrada")
+        return _registro_execucao(row)
+
+    def finalizar(
+        self, execution_id: uuid.UUID | str, status: str,
+        detalhe: Mapping[str, Any] | None = None, erro: BaseException | str | None = None,
+    ) -> RegistroExecucao:
+        if status not in _FINAIS:
+            raise ValueError(f"status final inválido: {status!r}")
+        erro_limpo = sanitizar_texto(str(erro)) if erro is not None else None
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE execucao_pipeline
+                SET status = %s, encerrado_em = now(), heartbeat_em = now(),
+                    detalhe = %s, erro_sanitizado = %s
+                WHERE execution_id = %s AND status = %s
+                RETURNING {_COLUNAS_EXECUCAO}
+                """,
+                (status, _json(dict(detalhe or {})), erro_limpo, execution_id, EXECUTANDO),
+            )
+            row = cur.fetchone()
+            conn.commit()
+        if row is None:
+            existente = self.obter(execution_id)
+            if existente is None:
+                raise ValueError("execução inexistente")
+            if existente.status == status:
+                return existente
+            raise ValueError(f"execução já encerrada como {existente.status!r}")
+        return _registro_execucao(row)
+
+    def iniciar_etapa(
+        self, execution_id: uuid.UUID | str, etapa: str,
+        detalhe: Mapping[str, Any] | None = None,
+    ) -> TentativaEtapa:
+        """Numera a tentativa sob lock da linha da execução, não da sessão."""
+        if not etapa:
+            raise ValueError("etapa é obrigatória")
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT status FROM execucao_pipeline WHERE execution_id = %s FOR UPDATE",
+                (execution_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError("execução inexistente")
+            if row[0] != EXECUTANDO:
+                raise ValueError(f"execução não está ativa: {row[0]!r}")
+            cur.execute(
+                "SELECT COALESCE(MAX(tentativa), 0) + 1 "
+                "FROM execucao_etapa_tentativa WHERE execution_id = %s AND etapa = %s",
+                (execution_id, etapa),
+            )
+            tentativa = cur.fetchone()[0]
+            cur.execute(
+                f"""
+                INSERT INTO execucao_etapa_tentativa (
+                    execution_id, etapa, tentativa, status, detalhe
+                ) VALUES (%s, %s, %s, %s, %s)
+                RETURNING {_COLUNAS_ETAPA}
+                """,
+                (execution_id, etapa, tentativa, ETAPA_EXECUTANDO,
+                 _json(dict(detalhe or {}))),
+            )
+            tentativa_row = cur.fetchone()
+            cur.execute(
+                "UPDATE execucao_pipeline SET heartbeat_em = now() WHERE execution_id = %s",
+                (execution_id,),
+            )
+            conn.commit()
+        return _tentativa_etapa(tentativa_row)
+
+    def concluir_etapa(
+        self, execution_id: uuid.UUID | str, etapa: str, tentativa: int,
+        status: str = ETAPA_SUCESSO, *, alvos_tentados: int = 0,
+        alvos_persistidos: int = 0, alvos_falhos: int = 0,
+        alvos_nao_executados: int = 0,
+        detalhe: Mapping[str, Any] | None = None,
+        erro: BaseException | str | None = None,
+    ) -> TentativaEtapa:
+        if status not in _ETAPA_FINAIS:
+            raise ValueError(f"status final de etapa inválido: {status!r}")
+        contagens = (
+            alvos_tentados, alvos_persistidos, alvos_falhos, alvos_nao_executados,
+        )
+        if any(valor < 0 for valor in contagens):
+            raise ValueError("contagens da etapa não podem ser negativas")
+        erro_limpo = sanitizar_texto(str(erro)) if erro is not None else None
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE execucao_etapa_tentativa
+                SET status = %s, encerrado_em = now(), alvos_tentados = %s,
+                    alvos_persistidos = %s, alvos_falhos = %s,
+                    alvos_nao_executados = %s, detalhe = %s, erro_sanitizado = %s
+                WHERE execution_id = %s AND etapa = %s AND tentativa = %s
+                  AND status = %s
+                RETURNING {_COLUNAS_ETAPA}
+                """,
+                (status, *contagens, _json(dict(detalhe or {})), erro_limpo,
+                 execution_id, etapa, tentativa, ETAPA_EXECUTANDO),
+            )
+            row = cur.fetchone()
+            cur.execute(
+                "UPDATE execucao_pipeline SET heartbeat_em = now() "
+                "WHERE execution_id = %s AND status = %s",
+                (execution_id, EXECUTANDO),
+            )
+            conn.commit()
+        if row is None:
+            raise ValueError("tentativa inexistente ou já encerrada")
+        return _tentativa_etapa(row)
+
+    def falhar_etapa(
+        self, execution_id: uuid.UUID | str, etapa: str, tentativa: int,
+        erro: BaseException | str, **kwargs: Any,
+    ) -> TentativaEtapa:
+        return self.concluir_etapa(
+            execution_id, etapa, tentativa, ETAPA_FALHA, erro=erro, **kwargs,
+        )
+
+    def interromper_etapa(
+        self, execution_id: uuid.UUID | str, etapa: str, tentativa: int,
+        motivo: str,
+    ) -> TentativaEtapa:
+        """Fecha a tentativa deixada aberta por crash antes de uma retomada."""
+        return self.falhar_etapa(
+            execution_id, etapa, tentativa, motivo,
+            detalhe={"interrompida_por_resume": True},
+        )
+
+    def classificar_orfas(self, minutos: int = 60) -> list[RegistroExecucao]:
+        if minutos <= 0:
+            raise ValueError("minutos deve ser positivo")
+        erro = f"heartbeat ausente há mais de {minutos} minuto(s)"
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE execucao_pipeline
+                SET status = %s, encerrado_em = now(), erro_sanitizado = %s
+                WHERE status = %s
+                  AND heartbeat_em < now() - make_interval(mins => %s)
+                RETURNING {_COLUNAS_EXECUCAO}
+                """,
+                (ORFA, erro, EXECUTANDO, minutos),
+            )
+            rows = cur.fetchall()
+            conn.commit()
+        return [_registro_execucao(row) for row in rows]
 
 
 def iniciar(gatilho: str = "manual") -> int:
     """Abre a execução e devolve o id. Commita imediatamente — ver cabeçalho."""
+    janela = f"legacy:{uuid.uuid4()}"
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO execucao_pipeline (status, gatilho) VALUES (%s, %s) "
+            "INSERT INTO execucao_pipeline ("
+            "ambiente, tipo_fluxo, janela_logica, status, gatilho"
+            ") VALUES (%s, %s, %s, %s, %s) "
             "RETURNING id",
-            (EXECUTANDO, gatilho),
+            (os.getenv("OPCOES_IA_ENV", "local"), "intraday", janela,
+             EXECUTANDO, gatilho),
         )
         execucao_id = cur.fetchone()[0]
         conn.commit()

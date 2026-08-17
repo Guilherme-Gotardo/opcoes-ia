@@ -1,0 +1,56 @@
+name: Terraform plan
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - "scripts/check_terraform.py"
+      - ".github/workflows/terraform-plan.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::351093152305:role/opcoes-ia-prod-github-plan
+          aws-region: sa-east-1
+
+      - name: Initialize remote state
+        run: terraform -chdir=infra/environments/prod init -backend-config=backend.hcl
+      - name: Resolve currently deployed immutable digests
+        id: digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          zero="sha256:$(printf '0%.0s' {1..64})"
+          api_uri="$(aws lambda get-function --function-name opcoes-ia-prod-api --query 'Code.ImageUri' --output text 2>/dev/null || true)"
+          operations_uri="$(aws ecs describe-task-definition --task-definition opcoes-ia-prod-operations --query 'taskDefinition.containerDefinitions[?name==`operations`].image | [0]' --output text 2>/dev/null || true)"
+          [[ "$api_uri" == *@sha256:* ]] && api_digest="${api_uri##*@}" || api_digest="$zero"
+          [[ "$operations_uri" == *@sha256:* ]] && operations_digest="${operations_uri##*@}" || operations_digest="$zero"
+          echo "api=$api_digest" >> "$GITHUB_OUTPUT"
+          echo "operations=$operations_digest" >> "$GITHUB_OUTPUT"
+      - name: Create reviewable plan
+        run: >-
+          terraform -chdir=infra/environments/prod plan
+          -input=false
+          -lock-timeout=5m
+          -var="api_image_digest=${{ steps.digests.outputs.api }}"
+          -var="operations_image_digest=${{ steps.digests.outputs.operations }}"
+          -out=tfplan
+      - name: Render plan without terminal control codes
+        run: terraform -chdir=infra/environments/prod show -no-color tfplan > infra/environments/prod/tfplan.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ github.event.pull_request.number }}
+          path: infra/environments/prod/tfplan.txt
+          if-no-files-found: error
+          retention-days: 14

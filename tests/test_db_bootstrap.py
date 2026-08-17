@@ -121,6 +121,46 @@ def test_alvo_e_impresso_antes_dos_arquivos(monkeypatch, capsys):
     assert saida.index("Alvo:") < saida.index("schema.sql")
 
 
+def test_aplicar_serializa_migracao_com_advisory_lock(tmp_path, monkeypatch):
+    arquivo = tmp_path / "001_teste.sql"
+    arquivo.write_text("SELECT 1;", encoding="utf-8")
+    executados = []
+
+    class Cursor:
+        def execute(self, query, params=None):
+            executados.append((query, params))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    class Conn:
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(bootstrap.psycopg, "connect", lambda _: Conn())
+    bootstrap.aplicar("postgresql://u:p@host/base", [arquivo])
+
+    assert executados[0] == (
+        "SELECT pg_advisory_lock(%s)", (bootstrap.MIGRATION_LOCK_ID,),
+    )
+    assert executados[1] == ("SELECT 1;", None)
+    assert executados[-1] == (
+        "SELECT pg_advisory_unlock(%s)", (bootstrap.MIGRATION_LOCK_ID,),
+    )
+
+
 # --- Integração (pulada sem Postgres) --------------------------------------
 
 def _banco_disponivel() -> bool:

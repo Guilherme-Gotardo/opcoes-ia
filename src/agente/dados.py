@@ -93,14 +93,18 @@ def _sugestoes(cur, data: dt.date) -> list[dict[str, Any]]:
     return saida
 
 
-def _enriquecimento(cur) -> list[dict[str, Any]]:
+def _enriquecimento(
+    cur, executado_em: dt.datetime | None = None,
+) -> list[dict[str, Any]]:
     cur.execute("SELECT to_regclass('public.enriquecimento_quant')")
     if cur.fetchone()[0] is None:
         return []
-    cur.execute("SELECT MAX(executado_em) FROM enriquecimento_quant")
-    linha = cur.fetchone()
-    if not linha or linha[0] is None:
-        return []
+    if executado_em is None:
+        cur.execute("SELECT MAX(executado_em) FROM enriquecimento_quant")
+        linha = cur.fetchone()
+        if not linha or linha[0] is None:
+            return []
+        executado_em = linha[0]
     cur.execute(
         """
         SELECT codigo_opcao, ticker_objeto, delta_modelo, gamma, theta_dia,
@@ -109,7 +113,7 @@ def _enriquecimento(cur) -> list[dict[str, Any]]:
         FROM enriquecimento_quant WHERE executado_em = %s
         ORDER BY ticker_objeto, codigo_opcao
         """,
-        (linha[0],),
+        (executado_em,),
     )
     campos = ("codigo_opcao", "ticker_objeto", "delta_modelo", "gamma",
               "theta_dia", "vega_pp", "preco_teorico",
@@ -174,7 +178,9 @@ def _lacunas(cur, patrimonio, sugestoes, desfecho, enriquecimento) -> list[str]:
     return lacunas
 
 
-def coletar(data: dt.date | None = None) -> InsumoRelatorio:
+def coletar(
+    data: dt.date | None = None, *, executado_em: dt.datetime | None = None,
+) -> InsumoRelatorio:
     """Junta o insumo do dia. Só leitura."""
     data = data or dt.datetime.now(dt.timezone.utc).date()
     params = carregar_params()
@@ -204,7 +210,7 @@ def coletar(data: dt.date | None = None) -> InsumoRelatorio:
             ],
         }
         sugestoes = _sugestoes(cur, data)
-        enriquecimento = _enriquecimento(cur)
+        enriquecimento = _enriquecimento(cur, executado_em)
         desfecho_linhas = ultima_execucao_do_dia(data)
         desfecho = [
             {

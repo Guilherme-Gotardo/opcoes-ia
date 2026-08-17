@@ -37,13 +37,16 @@ import os
 import sys
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import UUID
 
 import src.config  # noqa: F401 — carrega o .env, convenção do projeto
 from src.agente import dados as coleta
 from src.agente.ferramentas import ConfiguracaoInvalida, do_arquivo
+from src.agente.notificar import NotificacaoErro, notificar_relatorio
 from src.agente.prompt import SISTEMA, montar
 from src.agente.verificar import diagnosticar_chave
 from src.db.connection import get_connection
+from src.observability.logging import configure_logging
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -184,7 +187,9 @@ def compor(insumo: coleta.InsumoRelatorio, modelo: str = MODELO_PADRAO) -> Relat
     )
 
 
-def gravar(data: dt.date, r: Relatorio) -> int | None:
+def gravar(
+    data: dt.date, r: Relatorio, execution_id: UUID | str | None = None,
+) -> int | None:
     """Persiste o relatório. Devolve o id, ou `None` se a migração 009 não
     foi aplicada — caso em que o arquivo em reports/ segue sendo escrito."""
     with get_connection() as conn, conn.cursor() as cur:
@@ -198,12 +203,12 @@ def gravar(data: dt.date, r: Relatorio) -> int | None:
         cur.execute(
             """
             INSERT INTO relatorios_agente (
-                data, texto, modelo, fontes, buscas,
+                execution_id, data, texto, modelo, fontes, buscas,
                 tokens_entrada, tokens_saida, insumo_resumo
-            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
             """,
             (
-                data, r.texto, r.modelo,
+                execution_id, data, r.texto, r.modelo,
                 json.dumps(r.fontes, ensure_ascii=False), r.buscas,
                 r.tokens_entrada, r.tokens_saida,
                 json.dumps(r.insumo_resumo, ensure_ascii=False),
@@ -212,6 +217,29 @@ def gravar(data: dt.date, r: Relatorio) -> int | None:
         id_ = cur.fetchone()[0]
         conn.commit()
     return id_
+
+
+def obter(relatorio_id: int) -> Relatorio | None:
+    """Recarrega o artefato persistido para uma notificação retomada."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT texto, modelo, fontes, buscas, tokens_entrada, "
+            "tokens_saida, insumo_resumo FROM relatorios_agente WHERE id = %s",
+            (relatorio_id,),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return None
+    texto, modelo, fontes, buscas, entrada, saida, resumo = row
+    if isinstance(fontes, str):
+        fontes = json.loads(fontes)
+    if isinstance(resumo, str):
+        resumo = json.loads(resumo)
+    return Relatorio(
+        texto=texto, modelo=modelo, fontes=list(fontes or []), buscas=buscas,
+        tokens_entrada=entrada, tokens_saida=saida,
+        insumo_resumo=dict(resumo or {}),
+    )
 
 
 def executar(data: dt.date | None = None, modelo: str = MODELO_PADRAO,
@@ -241,6 +269,13 @@ def executar(data: dt.date | None = None, modelo: str = MODELO_PADRAO,
 
     id_ = gravar(data, relatorio)
     caminho = escrever_arquivo(data, relatorio)
+    try:
+        notificar_relatorio(data, relatorio)
+    except NotificacaoErro as e:
+        # O relatório já foi persistido. A saída não perde a apuração, mas o
+        # timer fica vermelho para que a falha de entrega seja investigada.
+        log.error("Relatório não foi enviado: %s", e)
+        return 1
     log.info(
         "Relatório composto: %s (id=%s, %d fonte(s), %d busca(s), "
         "%s tokens de entrada e %s de saída)",
@@ -251,6 +286,7 @@ def executar(data: dt.date | None = None, modelo: str = MODELO_PADRAO,
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_logging("agent-report")
     p = argparse.ArgumentParser(description="Compõe o relatório do dia.")
     p.add_argument("--data", type=dt.date.fromisoformat, default=None)
     p.add_argument("--modelo", default=MODELO_PADRAO)

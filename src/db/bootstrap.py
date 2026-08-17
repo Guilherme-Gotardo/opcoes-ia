@@ -44,6 +44,7 @@ import psycopg
 DB_DIR = Path(__file__).resolve().parent
 SCHEMA = DB_DIR / "schema.sql"
 MIGRATIONS_DIR = DB_DIR / "migrations"
+MIGRATION_LOCK_ID = 7168735202640912781
 
 #: Prefixo numérico da migração (`001_earnings_events.sql`).
 _PREFIXO = re.compile(r"^(\d+)_")
@@ -95,10 +96,10 @@ def arquivos_a_aplicar() -> list[Path]:
 
 
 def _database_url() -> str:
-    """Lê `DATABASE_URL` direto do ambiente, sem passar por `config.Settings`.
+    """Lê a URL administrativa direta usada somente pela migração.
 
-    `Settings.load()` exige também `OPLAB_TOKEN` e `BRAPI_TOKEN`, e preparar
-    um banco não deveria depender de credencial de provedor de mercado.
+    A aplicação usa o loader isolado de banco e o endpoint pooled; bootstrap
+    permanece explícito porque migração pode depender de estado de sessão.
     """
     from dotenv import load_dotenv  # noqa: PLC0415
 
@@ -123,7 +124,11 @@ def aplicar(url: str, arquivos: list[Path]) -> None:
             f"não foi possível conectar em {alvo_legivel(url)}: {exc}"
         ) from exc
 
+    lock_adquirido = False
     try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(%s)", (MIGRATION_LOCK_ID,))
+        lock_adquirido = True
         for caminho in arquivos:
             sql = caminho.read_text(encoding="utf-8")
             try:
@@ -137,7 +142,16 @@ def aplicar(url: str, arquivos: list[Path]) -> None:
                 ) from exc
             print(f"  aplicado: {caminho.name}")
     finally:
-        conn.close()
+        try:
+            if lock_adquirido:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_unlock(%s)", (MIGRATION_LOCK_ID,))
+        except psycopg.Error:
+            # Fechar a sessão libera o advisory lock mesmo se o unlock explícito
+            # falhar; nunca substitui o erro original da migração.
+            pass
+        finally:
+            conn.close()
 
 
 def executar(dry_run: bool = False) -> int:

@@ -29,7 +29,7 @@ def _item(stock, name=None, tipo="stock", subtipo="stock", setor="Energy"):
 
 def _buscar(itens):
     with patch.object(catalogo, "requests") as req, \
-         patch.object(catalogo, "get_settings") as cfg:
+         patch.object(catalogo, "get_brapi_settings") as cfg:
         cfg.return_value.brapi_token = "t"
         req.RequestException = requests.RequestException
         req.get.return_value = _resposta({"stocks": itens})
@@ -112,7 +112,7 @@ def test_falha_de_rede_nao_vira_lista_vazia():
     """Quem chama precisa distinguir 'nada encontrado' de 'não consegui
     procurar' — as duas exigem ações opostas do usuário."""
     with patch.object(catalogo, "requests") as req, \
-         patch.object(catalogo, "get_settings") as cfg:
+         patch.object(catalogo, "get_brapi_settings") as cfg:
         cfg.return_value.brapi_token = "t"
         req.RequestException = requests.RequestException
         req.get.side_effect = requests.RequestException("timeout")
@@ -122,7 +122,7 @@ def test_falha_de_rede_nao_vira_lista_vazia():
 
 def test_formato_inesperado_falha_alto():
     with patch.object(catalogo, "requests") as req, \
-         patch.object(catalogo, "get_settings") as cfg:
+         patch.object(catalogo, "get_brapi_settings") as cfg:
         cfg.return_value.brapi_token = "t"
         req.RequestException = requests.RequestException
         req.get.return_value = _resposta({"algo": "diferente"})
@@ -134,7 +134,7 @@ def test_formato_inesperado_falha_alto():
 
 def _perfil(cnpj):
     with patch.object(catalogo, "requests") as req, \
-         patch.object(catalogo, "get_settings") as cfg:
+         patch.object(catalogo, "get_brapi_settings") as cfg:
         cfg.return_value.brapi_token = "t"
         req.RequestException = requests.RequestException
         req.get.return_value = _resposta(

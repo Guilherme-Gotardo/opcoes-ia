@@ -21,8 +21,9 @@ Description=opcoes-ia — agenda dos disparos de pregão (B3)
 [Timer]
 Unit=opcoes-ia-pregao.service
 
-# De 30 em 30 minutos, das 10h às 16h30, mais um disparo às 17h para pegar o
-# fechamento. 14 disparos por dia útil.
+# De 30 em 30 minutos, das 10h às 16h30: 14 disparos por dia útil. O disparo
+# diário das 17h10 coleta o fechamento; repetir às 17h gastaria orçamento e o
+# RandomizedDelaySec ainda poderia empurrá-lo para fora da sessão.
 #
 # O fuso vai no PRÓPRIO OnCalendar (systemd >= 252). Não existe chave
 # `Timezone=` em [Timer] — escrevê-la é aceito em silêncio como "Unknown
@@ -31,7 +32,6 @@ Unit=opcoes-ia-pregao.service
 # madrugada, o calendário pularia todos por "antes da abertura", e o dia
 # inteiro passaria sem sugestão nenhuma e sem um único erro.
 OnCalendar=Mon..Fri *-*-* 10..16:00/30 America/Sao_Paulo
-OnCalendar=Mon..Fri *-*-* 17:00 America/Sao_Paulo
 
 # Persistent=false de propósito: com true, um disparo perdido (máquina
 # desligada) rodaria no boot seguinte — possivelmente às 2h da manhã, sobre

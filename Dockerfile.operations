@@ -1,0 +1,40 @@
+# syntax=docker/dockerfile:1
+# Manifest linux/amd64 de python:3.12-slim-trixie, fixado em 2026-08-17.
+ARG PYTHON_BASE=python:3.12-slim-trixie@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a
+
+FROM --platform=linux/amd64 ${PYTHON_BASE} AS build
+
+ENV PATH=/opt/venv/bin:$PATH
+RUN python -m venv /opt/venv
+COPY requirements/operations.lock /tmp/operations.lock
+RUN python -m pip install \
+    --disable-pip-version-check \
+    --no-cache-dir \
+    --require-hashes \
+    -r /tmp/operations.lock
+
+COPY src /build/src
+COPY skills /build/skills
+COPY scripts/container_smoke.py /tmp/container_smoke.py
+WORKDIR /build
+RUN python /tmp/container_smoke.py operations
+
+FROM --platform=linux/amd64 ${PYTHON_BASE} AS runtime
+
+ENV HOME=/home/app \
+    PATH=/opt/venv/bin:$PATH \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    TMPDIR=/tmp
+
+RUN groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid app --create-home --home-dir /home/app app \
+    && chmod 1777 /tmp
+
+COPY --from=build /opt/venv /opt/venv
+COPY --from=build --chown=app:app /build /app
+WORKDIR /app
+USER app
+
+ENTRYPOINT ["python", "-m", "src.operations"]
+CMD ["--help"]

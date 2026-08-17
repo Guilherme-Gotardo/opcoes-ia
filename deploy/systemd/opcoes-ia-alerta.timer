@@ -1,0 +1,14 @@
+# Conferência diária após o fechamento. O caminho não depende do LLM.
+
+[Unit]
+Description=opcoes-ia — confere se o pipeline de pregão rodou hoje
+
+[Timer]
+Unit=opcoes-ia-alerta.service
+OnCalendar=Mon..Fri *-*-* 18:00 America/Sao_Paulo
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target

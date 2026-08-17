@@ -1,7 +1,8 @@
-"""Geração do relatório diário consolidado (carteira, alertas, sugestões)
-como um arquivo Markdown persistido — ver design.md, decisão 5. Nunca
-sobrescreve o relatório de um dia anterior; nunca preenche lacuna de dado
-com suposição, sempre sinaliza como alerta.
+"""Geração do relatório diário consolidado (carteira, alertas, sugestões).
+
+Quando recebe uma execução, o Markdown é persistido no Postgres; `reports/`
+é apenas export local opcional. Nunca preenche lacuna de dado com suposição,
+sempre sinaliza como alerta.
 
 Uso pelo agente `orchestrator`, ao final do fluxo diário:
     python -m src.report.daily
@@ -10,10 +11,12 @@ import datetime as dt
 import json
 import logging
 from pathlib import Path
+from uuid import UUID
 
-from src.config import get_settings
+from src.config import get_news_settings
 from src.db.connection import get_connection
 from src.market.valuation import carregar_params, visao_carteira
+from src.report.repository import salvar as salvar_relatorio
 from src.strategy.outcome_repository import ultima_execucao_do_dia
 
 logging.basicConfig(level=logging.INFO)
@@ -88,7 +91,7 @@ def _alertas(cur, posicoes: list[dict], data: dt.date) -> list[str]:
             alertas.append(f"{ticker}: dado de opções desatualizado (última coleta em {ultima_opcao.date()}).")
 
     try:
-        settings = get_settings()
+        settings = get_news_settings()
         if not settings.news_api_key:
             alertas.append("Notícias: coleta não configurada (NEWS_API_KEY ausente) — etapa pulada.")
     except RuntimeError as exc:
@@ -350,17 +353,15 @@ def _renderizar_markdown(
 
 
 def gerar_relatorio(
-    data: dt.date | None = None, avaliacoes: list | None = None
-) -> Path:
+    data: dt.date | None = None, avaliacoes: list | None = None, *,
+    execution_id: UUID | str | None = None, exportar_arquivo: bool = True,
+) -> Path | None:
     # Convenção do projeto: todo timestamp é UTC (ver cabeçalho de
     # schema.sql). `coletado_em` é gravado e lido em UTC, então o "dia" do
     # relatório também precisa ser UTC — usar a data local aqui causaria
     # falso alerta de "dado desatualizado" sempre que o horário local
     # estiver atrasado em relação ao UTC (ex.: à noite no Brasil).
     data = data or dt.datetime.now(dt.timezone.utc).date()
-    REPORTS_DIR.mkdir(exist_ok=True)
-    caminho = REPORTS_DIR / f"{data.isoformat()}.md"
-
     params = carregar_params()
     with get_connection() as conn, conn.cursor() as cur:
         resumo = _resumo_carteira(cur, params, _referencia_de_frescor(data))
@@ -381,6 +382,14 @@ def gerar_relatorio(
     conteudo = _renderizar_markdown(
         data, resumo, alertas, sugestoes, bloqueios, desfecho
     )
+    if execution_id is not None:
+        salvar_relatorio(execution_id, data, conteudo)
+    if not exportar_arquivo:
+        log.info("Relatório persistido sem export local: %s", data.isoformat())
+        return None
+
+    REPORTS_DIR.mkdir(exist_ok=True)
+    caminho = REPORTS_DIR / f"{data.isoformat()}.md"
     caminho.write_text(conteudo, encoding="utf-8")
     log.info("Relatório gerado: %s", caminho)
     return caminho

@@ -6,15 +6,15 @@ perdida.
 
 ## Por que existe um banco gerenciado
 
-O `daily-etl.yml` roda no GitHub Actions, que não alcança `localhost:5433`.
-Sem um banco acessível pela internet, todo passo do workflow falha na
-conexão — o cron existia desde o início do projeto e nunca produziu efeito.
+Lambda, Fargate e o job de migração do GitHub Actions não alcançam
+`localhost:5433`. O Neon permite que runtimes efêmeros compartilhem a mesma
+fonte de verdade sem manter servidor de aplicação ligado.
 
 ## Quem é quem
 
 | Banco | Papel | Perder é grave? |
 |---|---|---|
-| Neon (`sa-east-1`, free tier) | **Fonte da verdade.** Posições, cotações, sugestões, eventos de resultado. É o que o Actions escreve. | Sim — refaça pelo runbook e recadastre as posições |
+| Neon (`sa-east-1`, free tier) | **Fonte da verdade.** Posições, mercado, execuções, sugestões e relatórios. Lambda/Fargate leem e escrevem aqui. | Sim — refaça pelo runbook e recadastre as posições |
 | `docker compose up -d db` | **Descartável.** Teste de integração e experimentação. | Não |
 
 A carteira real **não** vive no banco local. Se você apontar `DATABASE_URL`
@@ -24,9 +24,9 @@ para `localhost` e vir um banco vazio, é isso: não é perda de dado.
 
 1. Criar conta em https://neon.tech e um projeto, free tier, região
    `sa-east-1` (São Paulo) para menor latência.
-2. Copiar a **connection string do endpoint direto** (não a do pooler — o
-   pipeline é um processo só, por execução diária, e o direto basta). Ela
-   contém a senha e não é exibida de novo.
+2. Copiar as connection strings direta e pooled. Migração usa a direta sob lock
+   de sessão; API e tarefas usam `-pooler` para limitar conexões serverless.
+   Ambas contêm senha e não entram no repositório.
 3. Conferir que a URL termina com `?sslmode=require`. Acrescente se o painel
    não incluir: o `psycopg` usa `sslmode=prefer` por padrão, que aceita
    conexão sem TLS. Contra o Neon funciona por acidente, e o dia em que não
@@ -54,14 +54,15 @@ para `localhost` e vir um banco vazio, é isso: não é perda de dado.
    "
    ```
 
-## Ligar ao GitHub Actions
+## Ligar aos runtimes hospedados
 
-1. Repositório → Settings → Secrets and variables → Actions → New repository
-   secret.
-2. Nome `DATABASE_URL`, valor igual ao do `.env`. Os outros secrets
-   (`BRAPI_TOKEN`, `OPLAB_TOKEN`) já devem estar lá.
-3. Actions → "ETL diário" → **Run workflow** (`workflow_dispatch`).
-4. **Não confie no verde do workflow.** Confira no banco que a execução
+1. Grave a URL direta como `NEON_DIRECT_DATABASE_URL` no GitHub Environment
+   `Principal`; somente o job de migração a recebe.
+2. Grave a URL pooled nos containers `opcoes-ia/prod/api` e
+   `opcoes-ia/prod/operations` do Secrets Manager conforme
+   `docs/RUNBOOK-CLOUD.md`.
+3. Execute o release e depois uma task manual com schedules desabilitados.
+4. **Não confie apenas no verde do workflow.** Confira no banco que a execução
    gravou:
 
    ```bash
@@ -76,9 +77,8 @@ para `localhost` e vir um banco vazio, é isso: não é perda de dado.
    Sem posição cadastrada não há o que coletar, e a execução passa sem
    gravar nada — cadastre pelo menos uma posição antes de validar.
 
-O `workflow_dispatch` existe justamente para isto: o cron roda uma vez por
-dia útil, e descobrir um secret errado por ele custaria um dia por
-tentativa.
+GitHub Actions não roda cron operacional. EventBridge Scheduler e o unico
+agendador de producao depois do cutover.
 
 ## Cadastrar a carteira
 

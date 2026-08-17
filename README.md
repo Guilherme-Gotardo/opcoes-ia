@@ -11,21 +11,17 @@ call/put como estratégia inicial; travas e condor planejados para fases futuras
 ## Visão geral
 
 ```
-Fontes de dados (OpLab / brapi / notícias)
-        │
-        ▼
-   ETL (src/etl)  ──▶  Postgres (src/db)
-                              │
-                              ▼
-                    Agentes (.claude/agents)
-                    ├── data-collector
-                    ├── market-analyst
-                    ├── strategy-covered
-                    └── orchestrator
-                              │
-                              ▼
-                    Relatório diário / alertas
+S3 privado -> CloudFront -> Cognito -> API Gateway -> Lambda/FastAPI -> Neon pooled
+                                                  |
+EventBridge Scheduler -> ECS Fargate operations --+
+                         |-> ETL / earnings / estratégia determinística
+                         |-> QuantLib / relatório Anthropic / notificação
+                         +-> CloudWatch EMF + SNS
 ```
+
+Produção usa imagens imutáveis no ECR, Terraform em state S3 e segredos
+injetados pelo AWS Secrets Manager. Os schedules nascem desabilitados e o
+cutover exige retirar timers locais. Veja `docs/RUNBOOK-CLOUD.md`.
 
 Veja `docs/ARQUITETURA.md` para o detalhamento de cada componente e as decisões de design.
 
@@ -42,7 +38,7 @@ do Claude Code sobre convenções, comandos e estado do projeto.
 git clone <seu-repo> opcoes-ia && cd opcoes-ia
 
 # 2. Ambiente Python
-python3 -m venv .venv && source .venv/bin/activate
+python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 # 3. Variáveis de ambiente (chaves de API)
@@ -61,6 +57,22 @@ python -m src.etl.fetch_options
 claude
 ```
 
+`requirements.txt` instala o lock completo de desenvolvimento. Os runtimes de
+produção são separados e reproduzíveis em Python 3.12/Linux amd64:
+
+```bash
+pip install --require-hashes -r requirements/api.lock
+pip install --require-hashes -r requirements/operations.lock
+```
+
+Os arquivos `.in` em `requirements/` registram somente dependências diretas. Os
+`.lock` incluem toda a árvore transitiva, versões exatas e hashes, gerados com
+`uv pip compile` para a plataforma dos containers. `pytest`, `uvicorn` e o
+`httpx` usado diretamente pelo `TestClient` ficam no lock de desenvolvimento;
+o lock operacional ainda contém `httpx` transitivamente porque o SDK Anthropic
+o usa em runtime. O procedimento exato de atualização está em
+`requirements/README.md`.
+
 ### Estrutura
 
 ```
@@ -70,7 +82,8 @@ opcoes-ia/
 ├── skills/                    # skills reutilizáveis (regras de estratégia)
 ├── src/etl/                   # coleta de cotações, opções e notícias
 ├── src/db/                    # schema e models
-├── .github/workflows/         # automação diária via GitHub Actions
+├── .github/workflows/         # CI, plano Terraform e release
+├── infra/                     # AWS serverless declarada em Terraform
 └── docs/ARQUITETURA.md        # decisões de arquitetura
 ```
 
@@ -80,5 +93,5 @@ opcoes-ia/
 - [ ] Fase 1 — ETL de cotações/opções + espelho de carteira (input manual ou via OpLab)
 - [ ] Fase 2 — Agente de análise (IV rank, notícias) + relatório diário
 - [ ] Fase 3 — Agente de estratégia: venda coberta (call/put)
-- [ ] Fase 4 — Dashboard simples (somente leitura)
+- [x] Fase 4 — Dashboard e API autenticada (leitura + escrituração de carteira)
 - [ ] Fase 5 — Travas e condor

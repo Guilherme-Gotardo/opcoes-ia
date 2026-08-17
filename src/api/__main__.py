@@ -1,8 +1,8 @@
-"""Sobe a API em 127.0.0.1 — NUNCA 0.0.0.0.
+"""Sobe a API de desenvolvimento em 127.0.0.1 — NUNCA 0.0.0.0.
 
 É a diferença entre "acessível na minha máquina" e "acessível na rede
-local"; sem autenticação, a segunda é exposição real. A decisão de não ter
-autenticação pressupõe exatamente este bind.
+local". Produção usa o handler Mangum e autenticação Cognito;
+este entrypoint Uvicorn permanece para o fluxo local.
 
 Uso:
     python -m src.api
@@ -19,6 +19,9 @@ import sys
 
 
 def main(argv: list[str] | None = None) -> int:
+    from src.observability.logging import configure_logging
+
+    configure_logging("api")
     parser = argparse.ArgumentParser(description="API de leitura da carteira.")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument(

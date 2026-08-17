@@ -1,0 +1,20 @@
+# Alerta independente do agente e do pipeline. Instalação: ver docs/PREGAO.md.
+
+[Unit]
+Description=opcoes-ia — alerta de ausência ou falha do pipeline de pregão
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Área de trabalho/projetos/opcoes-ia
+ExecStart="%h/Área de trabalho/projetos/opcoes-ia/.venv/bin/python" -m scripts.alertar_pregao
+EnvironmentFile=%h/.config/opcoes-ia/env
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=120
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths="%h/Área de trabalho/projetos/opcoes-ia"

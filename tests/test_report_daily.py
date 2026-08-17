@@ -93,7 +93,7 @@ def _settings_configurado():
 def test_relatorio_sem_posicoes_nem_sugestoes(tmp_path):
     fake_conn = _FakeConnection(_FakeCursor(_dispatcher([], {}, {}, [])))
     with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
-         patch("src.report.daily.get_settings", _settings_configurado), \
+         patch("src.report.daily.get_news_settings", _settings_configurado), \
          patch.object(daily, "REPORTS_DIR", tmp_path):
         caminho = daily.gerar_relatorio(dt.date(2026, 8, 14))
 
@@ -114,7 +114,7 @@ def test_alerta_quando_cotacao_desatualizada(tmp_path):
         ))
     )
     with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
-         patch("src.report.daily.get_settings", _settings_configurado), \
+         patch("src.report.daily.get_news_settings", _settings_configurado), \
          patch.object(daily, "REPORTS_DIR", tmp_path):
         caminho = daily.gerar_relatorio(hoje)
 
@@ -127,7 +127,7 @@ def test_alerta_news_nao_configurado(tmp_path):
     fake_conn = _FakeConnection(_FakeCursor(_dispatcher([], {}, {}, [])))
     settings_sem_chave = MagicMock(news_api_key="")
     with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
-         patch("src.report.daily.get_settings", return_value=settings_sem_chave), \
+         patch("src.report.daily.get_news_settings", return_value=settings_sem_chave), \
          patch.object(daily, "REPORTS_DIR", tmp_path):
         caminho = daily.gerar_relatorio(dt.date(2026, 8, 14))
 
@@ -144,7 +144,7 @@ def test_sugestao_inclui_texto_de_revisao_humana(tmp_path):
     ]
     fake_conn = _FakeConnection(_FakeCursor(_dispatcher([], {}, {}, sugestoes_rows)))
     with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
-         patch("src.report.daily.get_settings", _settings_configurado), \
+         patch("src.report.daily.get_news_settings", _settings_configurado), \
          patch.object(daily, "REPORTS_DIR", tmp_path):
         caminho = daily.gerar_relatorio(dt.date(2026, 8, 14))
 
@@ -157,7 +157,7 @@ def test_sugestao_inclui_texto_de_revisao_humana(tmp_path):
 def test_dois_dias_geram_dois_arquivos_distintos(tmp_path):
     fake_conn = _FakeConnection(_FakeCursor(_dispatcher([], {}, {}, [])))
     with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
-         patch("src.report.daily.get_settings", _settings_configurado), \
+         patch("src.report.daily.get_news_settings", _settings_configurado), \
          patch.object(daily, "REPORTS_DIR", tmp_path):
         caminho1 = daily.gerar_relatorio(dt.date(2026, 8, 13))
         caminho2 = daily.gerar_relatorio(dt.date(2026, 8, 14))
@@ -173,7 +173,7 @@ def _relatorio_com(tmp_path, data, posicoes, cotacoes, **kwargs):
         posicoes, {}, {}, [], cotacoes=cotacoes, **kwargs
     )))
     with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
-         patch("src.report.daily.get_settings", _settings_configurado), \
+         patch("src.report.daily.get_news_settings", _settings_configurado), \
          patch.object(daily, "REPORTS_DIR", tmp_path):
         return daily.gerar_relatorio(data).read_text(encoding="utf-8")
 
@@ -374,7 +374,7 @@ def test_relatorio_sem_argumento_monta_secao_a_partir_do_banco(tmp_path):
     desfecho = [_desfecho("criterio_reprovado", contagem={"iv_rank": 8})]
 
     with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
-         patch("src.report.daily.get_settings", _settings_configurado), \
+         patch("src.report.daily.get_news_settings", _settings_configurado), \
          patch("src.report.daily.ultima_execucao_do_dia", return_value=desfecho), \
          patch.object(daily, "REPORTS_DIR", tmp_path):
         conteudo = daily.gerar_relatorio(dt.date(2026, 8, 16)).read_text(encoding="utf-8")
@@ -392,7 +392,7 @@ def test_motivo_alem_de_earnings_aparece(tmp_path):
         _desfecho("sem_opcoes", ticker="ITUB4", quantidade=0),
     ]
     with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
-         patch("src.report.daily.get_settings", _settings_configurado), \
+         patch("src.report.daily.get_news_settings", _settings_configurado), \
          patch("src.report.daily.ultima_execucao_do_dia", return_value=desfecho), \
          patch.object(daily, "REPORTS_DIR", tmp_path):
         conteudo = daily.gerar_relatorio(dt.date(2026, 8, 16)).read_text(encoding="utf-8")
@@ -406,7 +406,7 @@ def test_bloqueio_por_earnings_no_desfecho_traz_os_dois_passos(tmp_path):
     fake_conn = _FakeConnection(_FakeCursor(_dispatcher([], {}, {}, [])))
     desfecho = [_desfecho("bloqueio_data_resultado", quantidade=12)]
     with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
-         patch("src.report.daily.get_settings", _settings_configurado), \
+         patch("src.report.daily.get_news_settings", _settings_configurado), \
          patch("src.report.daily.ultima_execucao_do_dia", return_value=desfecho), \
          patch.object(daily, "REPORTS_DIR", tmp_path):
         conteudo = daily.gerar_relatorio(dt.date(2026, 8, 16)).read_text(encoding="utf-8")
@@ -425,7 +425,7 @@ def test_amostra_do_desfecho_aparece_com_os_criterios(tmp_path):
     }
     desfecho = [_desfecho("criterio_reprovado", amostra=amostra)]
     with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
-         patch("src.report.daily.get_settings", _settings_configurado), \
+         patch("src.report.daily.get_news_settings", _settings_configurado), \
          patch("src.report.daily.ultima_execucao_do_dia", return_value=desfecho), \
          patch.object(daily, "REPORTS_DIR", tmp_path):
         conteudo = daily.gerar_relatorio(dt.date(2026, 8, 16)).read_text(encoding="utf-8")
@@ -437,7 +437,7 @@ def test_amostra_do_desfecho_aparece_com_os_criterios(tmp_path):
 def test_sugerida_nao_aparece_na_secao_de_nao_sugestoes(tmp_path):
     fake_conn = _FakeConnection(_FakeCursor(_dispatcher([], {}, {}, [])))
     with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
-         patch("src.report.daily.get_settings", _settings_configurado), \
+         patch("src.report.daily.get_news_settings", _settings_configurado), \
          patch("src.report.daily.ultima_execucao_do_dia",
                return_value=[_desfecho("sugerida", quantidade=1)]), \
          patch.object(daily, "REPORTS_DIR", tmp_path):
@@ -450,7 +450,7 @@ def test_desfecho_nao_e_consultado_quando_avaliacoes_e_informado(tmp_path):
     """O argumento continua tendo precedência — não somamos as duas fontes."""
     fake_conn = _FakeConnection(_FakeCursor(_dispatcher([], {}, {}, [])))
     with patch("src.report.daily.get_connection", _patched_get_connection(fake_conn)), \
-         patch("src.report.daily.get_settings", _settings_configurado), \
+         patch("src.report.daily.get_news_settings", _settings_configurado), \
          patch("src.report.daily.ultima_execucao_do_dia") as mock_consulta, \
          patch.object(daily, "REPORTS_DIR", tmp_path):
         daily.gerar_relatorio(dt.date(2026, 8, 16), avaliacoes=[])

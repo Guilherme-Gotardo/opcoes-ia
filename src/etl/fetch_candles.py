@@ -35,9 +35,10 @@ import logging
 import requests
 
 from src.assets.manage import tickers_cadastrados, universo_de_analise
-from src.config import get_settings
+from src.config import get_brapi_settings
 from src.db.connection import get_connection
 from src.etl.budget import orcamento_restante_hoje
+from src.etl.result import DetalheAlvo, EstadoAlvo, ResultadoColeta
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ class FormatoRespostaInvalido(RuntimeError):
 
 def fetch_um(ticker: str, intervalo: str, janela: str) -> list[dict]:
     """Histórico de UM ticker. Devolve lista possivelmente vazia."""
-    settings = get_settings()
+    settings = get_brapi_settings()
     resp = requests.get(
         f"{BRAPI_URL}/{ticker}",
         params={"range": janela, "interval": intervalo},
@@ -139,20 +140,41 @@ def main(
     tickers: list[str] | None = None,
     intervalo: str = INTERVALO_PADRAO,
     janela: str | None = None,
-) -> None:
+) -> ResultadoColeta:
     janela = janela or JANELA_PADRAO_POR_INTERVALO.get(intervalo)
+    contexto = {"intervalo": intervalo, "janela": janela}
     if janela is None:
         log.error(
             "Intervalo sem janela padrão conhecida: %s. Informe --janela "
             "explicitamente ou use um de: %s",
             intervalo, ", ".join(sorted(JANELA_PADRAO_POR_INTERVALO)),
         )
-        return
+        return ResultadoColeta.de_detalhes(
+            f"candles_{intervalo}",
+            "brapi",
+            [
+                DetalheAlvo(
+                    "__configuracao__",
+                    EstadoAlvo.FALHA,
+                    codigo_motivo="intervalo_sem_janela",
+                    detalhe=f"Intervalo sem janela padrão conhecida: {intervalo}.",
+                    tentado=False,
+                )
+            ],
+            contexto=contexto,
+        )
 
-    tickers = tickers or _tickers_da_carteira()
+    if tickers is None:
+        tickers = _tickers_da_carteira()
     if not tickers:
         log.warning("Nenhum ticker na carteira — nada a coletar.")
-        return
+        return ResultadoColeta.pulado(
+            f"candles_{intervalo}",
+            "brapi",
+            "universo_vazio",
+            contexto=contexto,
+        )
+    ordem_tickers = {ticker.upper(): indice for indice, ticker in enumerate(tickers)}
 
     # Mesma checagem do `fetch_quotes`, pela mesma razão: `candles.ticker`
     # tem FK para `ativos`, e sem o cadastro o erro que chega ao usuário é a
@@ -160,6 +182,16 @@ def main(
     cadastrados = tickers_cadastrados(tickers)
     nao_cadastrados = [t for t in tickers if t.upper() not in cadastrados]
     tickers = [t for t in tickers if t.upper() in cadastrados]
+    detalhes = [
+        DetalheAlvo(
+            t.upper(),
+            EstadoAlvo.NAO_EXECUTADO,
+            codigo_motivo="ativo_nao_cadastrado",
+            detalhe="Ativo não cadastrado em ativos.",
+            tentado=False,
+        )
+        for t in nao_cadastrados
+    ]
     if nao_cadastrados:
         log.error(
             "Ativo não cadastrado (a vela seria recusada pelo banco): %s. "
@@ -168,10 +200,14 @@ def main(
         )
     if not tickers:
         log.warning("Nenhum ticker cadastrado para coletar.")
-        return
+        return ResultadoColeta.de_detalhes(
+            f"candles_{intervalo}", "brapi", detalhes, contexto=contexto
+        )
 
     with get_connection() as conn, conn.cursor() as cur:
-        restante = orcamento_restante_hoje(cur, get_settings().brapi_requests_dia_maximo)
+        restante = orcamento_restante_hoje(
+            cur, get_brapi_settings().brapi_requests_dia_maximo
+        )
 
     a_processar, fora_do_orcamento = tickers, []
     if restante < len(tickers):
@@ -181,6 +217,16 @@ def main(
             "%d requests restantes). Fora do orçamento hoje: %s",
             len(tickers), restante, sorted(fora_do_orcamento),
         )
+    detalhes.extend(
+        DetalheAlvo(
+            t.upper(),
+            EstadoAlvo.NAO_EXECUTADO,
+            codigo_motivo="orcamento_insuficiente",
+            detalhe="Ticker fora do orçamento diário de requests da Brapi.",
+            tentado=False,
+        )
+        for t in fora_do_orcamento
+    )
 
     total = 0
     falhas: dict[str, str] = {}
@@ -189,11 +235,22 @@ def main(
             pontos = fetch_um(t, intervalo, janela)
             gravadas = upsert(t.upper(), intervalo, pontos)
             total += gravadas
+            detalhes.append(
+                DetalheAlvo(t.upper(), EstadoAlvo.SUCESSO, gravadas)
+            )
             if gravadas == 0:
                 log.info("Sem velas para %s em %s/%s (janela sem pregão?)",
                          t, intervalo, janela)
         except Exception as exc:  # noqa: BLE001 — falha por ticker é isolada de propósito
             falhas[t] = str(exc)
+            detalhes.append(
+                DetalheAlvo(
+                    t.upper(),
+                    EstadoAlvo.FALHA,
+                    codigo_motivo="falha_coleta",
+                    detalhe=str(exc),
+                )
+            )
             log.error("Falha ao coletar velas de %s: %s", t, exc)
 
     log.info(
@@ -202,6 +259,10 @@ def main(
         total, intervalo, janela, len(a_processar),
         sorted(falhas) if falhas else "nenhuma",
         sorted(fora_do_orcamento) if fora_do_orcamento else "nenhum",
+    )
+    detalhes.sort(key=lambda item: ordem_tickers[item.ticker])
+    return ResultadoColeta.de_detalhes(
+        f"candles_{intervalo}", "brapi", detalhes, contexto=contexto
     )
 
 

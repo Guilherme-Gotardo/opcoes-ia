@@ -1,6 +1,7 @@
 """Testes do entrypoint de consolidação (`src.earnings.ingest`), com
 serviço e providers dublês — sem banco e sem rede."""
 import datetime as dt
+from types import SimpleNamespace
 
 import pytest
 
@@ -48,6 +49,10 @@ class _ServicoFake:
     def coletar(self, tickers):
         self.coletar_chamadas += 1
         return dict(self._coletado)
+
+    def coletar_com_resultado(self, tickers):
+        self.coletar_chamadas += 1
+        return SimpleNamespace(afirmacoes=dict(self._coletado), falhas={})
 
     def ingerir(self, tickers, coletado=None):
         self.ingerir_chamadas += 1

@@ -19,9 +19,10 @@ import logging
 import requests
 
 from src.assets.manage import tickers_cadastrados, universo_de_analise
-from src.config import get_settings
+from src.config import get_brapi_settings
 from src.db.connection import get_connection
 from src.etl.budget import orcamento_restante_hoje
+from src.etl.result import DetalheAlvo, EstadoAlvo, ResultadoColeta
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ class FormatoRespostaInvalido(RuntimeError):
 def fetch_um(ticker: str) -> dict:
     """Busca a cotação de UM ticker — o plano Free só permite 1 ativo por
     requisição, então não há uma versão em lote."""
-    settings = get_settings()
+    settings = get_brapi_settings()
     resp = requests.get(
         BRAPI_URL,
         params={"symbols": ticker},
@@ -82,14 +83,18 @@ def upsert(rows: list[dict]) -> int:
     return len(rows)
 
 
-def main(tickers: list[str] | None = None) -> None:
-    tickers = tickers or _tickers_da_carteira()
+def main(tickers: list[str] | None = None) -> ResultadoColeta:
+    if tickers is None:
+        tickers = _tickers_da_carteira()
     if not tickers:
         log.warning("Nenhum ticker na carteira — nada a coletar.")
-        return
+        return ResultadoColeta.pulado("cotacoes", "brapi", "universo_vazio")
+    ordem_tickers = {ticker.upper(): indice for indice, ticker in enumerate(tickers)}
 
     with get_connection() as conn, conn.cursor() as cur:
-        restante = orcamento_restante_hoje(cur, get_settings().brapi_requests_dia_maximo)
+        restante = orcamento_restante_hoje(
+            cur, get_brapi_settings().brapi_requests_dia_maximo
+        )
 
     # Uma consulta só, antes de gastar request: sem o ativo cadastrado, o
     # INSERT em `cotacoes` viola a FK para `ativos` e o erro que chega ao
@@ -100,6 +105,16 @@ def main(tickers: list[str] | None = None) -> None:
     cadastrados = tickers_cadastrados(tickers)
     nao_cadastrados = [t for t in tickers if t.upper() not in cadastrados]
     tickers = [t for t in tickers if t.upper() in cadastrados]
+    detalhes = [
+        DetalheAlvo(
+            t.upper(),
+            EstadoAlvo.NAO_EXECUTADO,
+            codigo_motivo="ativo_nao_cadastrado",
+            detalhe="Ativo não cadastrado em ativos.",
+            tentado=False,
+        )
+        for t in nao_cadastrados
+    ]
 
     if nao_cadastrados:
         log.error(
@@ -109,7 +124,7 @@ def main(tickers: list[str] | None = None) -> None:
         )
     if not tickers:
         log.warning("Nenhum ticker cadastrado para coletar.")
-        return
+        return ResultadoColeta.de_detalhes("cotacoes", "brapi", detalhes)
 
     a_processar, fora_do_orcamento = tickers, []
     if restante < len(tickers):
@@ -120,15 +135,37 @@ def main(tickers: list[str] | None = None) -> None:
             "do orçamento hoje: %s",
             len(tickers), restante, sorted(fora_do_orcamento),
         )
+    detalhes.extend(
+        DetalheAlvo(
+            t.upper(),
+            EstadoAlvo.NAO_EXECUTADO,
+            codigo_motivo="orcamento_insuficiente",
+            detalhe="Ticker fora do orçamento diário de requests da Brapi.",
+            tentado=False,
+        )
+        for t in fora_do_orcamento
+    )
 
     total = 0
     falhas: dict[str, str] = {}
     for t in a_processar:
         try:
             row = fetch_um(t)
-            total += upsert([row])
+            gravadas = upsert([row])
+            total += gravadas
+            detalhes.append(
+                DetalheAlvo(t.upper(), EstadoAlvo.SUCESSO, gravadas)
+            )
         except Exception as exc:  # noqa: BLE001 — isolamos falha por ticker de propósito
             falhas[t] = str(exc)
+            detalhes.append(
+                DetalheAlvo(
+                    t.upper(),
+                    EstadoAlvo.FALHA,
+                    codigo_motivo="falha_coleta",
+                    detalhe=str(exc),
+                )
+            )
             log.error("Falha ao coletar cotação de %s: %s", t, exc)
 
     log.info(
@@ -139,6 +176,8 @@ def main(tickers: list[str] | None = None) -> None:
         sorted(nao_cadastrados) if nao_cadastrados else "nenhum",
         sorted(fora_do_orcamento) if fora_do_orcamento else "nenhum",
     )
+    detalhes.sort(key=lambda item: ordem_tickers[item.ticker])
+    return ResultadoColeta.de_detalhes("cotacoes", "brapi", detalhes)
 
 
 def _tickers_da_carteira() -> list[str]:

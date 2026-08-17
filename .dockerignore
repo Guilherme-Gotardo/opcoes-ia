@@ -1,0 +1,23 @@
+# O contexto de build e uma allowlist. Arquivos locais, historico, testes,
+# relatorios e qualquer variante de .env nunca chegam ao daemon.
+*
+!Dockerfile.api
+!Dockerfile.operations
+!requirements/
+!requirements/**
+!scripts/
+!scripts/container_smoke.py
+!src/
+!src/**
+!skills/
+!skills/**
+
+# Estas negacoes finais vencem qualquer reinclusao acima.
+**/.env
+**/.env.*
+**/*.key
+**/*.pem
+**/credentials
+**/credentials.*
+**/__pycache__/
+**/*.py[cod]

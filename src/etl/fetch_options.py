@@ -12,9 +12,10 @@ import logging
 
 import requests
 
-from src.config import get_settings
+from src.config import get_options_settings
 from src.assets.manage import universo_de_analise
 from src.db.connection import get_connection
+from src.etl.result import DetalheAlvo, EstadoAlvo, ResultadoColeta
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -32,13 +33,46 @@ class FormatoRespostaInvalido(RuntimeError):
     validado — nunca gravamos dado parcial/incorreto nesse caso."""
 
 
+class RecursoIndisponivelNoPlano(RuntimeError):
+    """O provedor confirmou que o recurso exige outro plano."""
+
+
+def _recurso_indisponivel_no_plano(resp: requests.Response) -> bool:
+    """Reconhece somente códigos estruturados já confirmados no provedor."""
+    if resp.status_code < 400:
+        return False
+    try:
+        payload = resp.json()
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+
+    codigos = [payload.get("code")]
+    erro = payload.get("error")
+    if isinstance(erro, dict):
+        codigos.append(erro.get("code"))
+    elif isinstance(erro, str):
+        codigos.append(erro)
+    return "FEATURE_NOT_AVAILABLE" in codigos
+
+
 def fetch(ticker_objeto: str) -> list[dict]:
-    settings = get_settings()
+    settings = get_options_settings()
+    if not settings.oplab_token:
+        raise RuntimeError(
+            "OPLAB_TOKEN não configurado: fetch_options ainda usa o provedor "
+            "OpLab abandonado; não há coleta de opções disponível no plano atual."
+        )
     resp = requests.get(
         OPLAB_OPTIONS_URL.format(ticker=ticker_objeto),
         headers={"Access-Token": settings.oplab_token},
         timeout=15,
     )
+    if _recurso_indisponivel_no_plano(resp):
+        raise RecursoIndisponivelNoPlano(
+            f"Recurso de opções indisponível no plano para {ticker_objeto}."
+        )
     resp.raise_for_status()
     return resp.json()
 
@@ -84,25 +118,76 @@ def upsert(ticker_objeto: str, options: list[dict]) -> int:
     return len(options)
 
 
-def main(tickers: list[str] | None = None) -> None:
-    tickers = tickers or _tickers_objeto_da_carteira()
+def main(tickers: list[str] | None = None) -> ResultadoColeta:
+    if tickers is None:
+        tickers = _tickers_objeto_da_carteira()
+    if not tickers:
+        log.warning("Nenhum ticker na carteira ou watchlist — nada a coletar.")
+        return ResultadoColeta.pulado("opcoes", "oplab", "universo_vazio")
+
+    settings = get_options_settings()
+    if not settings.oplab_token:
+        motivo = (
+            "OPLAB_TOKEN não configurado: fetch_options ainda usa o provedor "
+            "OpLab abandonado; não há coleta de opções disponível no plano atual."
+        )
+        log.warning(motivo)
+        return ResultadoColeta.de_detalhes("opcoes", "oplab", [
+            DetalheAlvo(
+                t,
+                EstadoAlvo.BLOQUEADO,
+                codigo_motivo="oplab_token_nao_configurado",
+                detalhe=motivo,
+                tentado=False,
+            )
+            for t in tickers
+        ])
+
     total = 0
     falhas: dict[str, str] = {}
+    bloqueados: dict[str, str] = {}
+    detalhes: list[DetalheAlvo] = []
     for t in tickers:
         try:
             options = fetch(t)
-            total += upsert(t, options)
+            persistidas = upsert(t, options)
+            total += persistidas
+            detalhes.append(DetalheAlvo(
+                t, EstadoAlvo.SUCESSO, registros_persistidos=persistidas,
+            ))
             log.info("Opções de %s: %d registros.", t, len(options))
+        except RecursoIndisponivelNoPlano as exc:
+            bloqueados[t] = str(exc)
+            detalhes.append(DetalheAlvo(
+                t,
+                EstadoAlvo.BLOQUEADO,
+                codigo_motivo="recurso_indisponivel_no_plano",
+                detalhe=str(exc),
+            ))
+            log.warning("Opções de %s bloqueadas pelo plano: %s", t, exc)
         except Exception as exc:  # noqa: BLE001 — isolamos falha por ticker de propósito
             falhas[t] = str(exc)
+            detalhes.append(DetalheAlvo(
+                t,
+                EstadoAlvo.FALHA,
+                codigo_motivo="erro_coleta",
+                detalhe=str(exc),
+            ))
             log.error("Falha ao coletar opções de %s: %s", t, exc)
     log.info(
-        "Total de opções atualizadas: %d. Tickers com falha: %s",
-        total, sorted(falhas) if falhas else "nenhum",
+        "Total de opções atualizadas: %d. Tickers bloqueados: %s. "
+        "Tickers com falha: %s",
+        total,
+        sorted(bloqueados) if bloqueados else "nenhum",
+        sorted(falhas) if falhas else "nenhum",
     )
+    if bloqueados:
+        for t, motivo in bloqueados.items():
+            log.warning("  - %s: %s", t, motivo)
     if falhas:
         for t, motivo in falhas.items():
             log.error("  - %s: %s", t, motivo)
+    return ResultadoColeta.de_detalhes("opcoes", "oplab", detalhes)
 
 
 def _tickers_objeto_da_carteira() -> list[str]:

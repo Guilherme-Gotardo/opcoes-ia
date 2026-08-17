@@ -25,13 +25,12 @@ propósito declarado do repositório `opcoes-ia-web`. A separação por módulo
 é o que mantém a garantia de leitura auditável — ver o cabeçalho de
 `escrita.py` para o raciocínio completo.
 
-SEM AUTENTICAÇÃO, POR DECISÃO REGISTRADA
-----------------------------------------
-Ferramenta de um usuário, na máquina do usuário. O servidor sobe ligado a
-`127.0.0.1` (nunca `0.0.0.0` — a diferença entre "minha máquina" e "minha
-rede local"), e o CORS libera só a origem do dev server do Vite. Publicar
-isto em endereço acessível pela internet exige rever a decisão numa change
-própria.
+AUTENTICAÇÃO NA FRONTEIRA HOSPEDADA
+-----------------------------------
+Em produção, API Gateway valida o access token Cognito antes da Lambda e toda
+rota de domínio repete essa validação antes de chegar ao banco. O modo local
+permanece ligado a `127.0.0.1`, sem exigir Cognito, e libera somente a origem
+configurada do dev server.
 
 Os modelos Pydantic existem para o OpenAPI sair descritivo o bastante para
 gerar os tipos TypeScript do frontend (`openapi-typescript`) — não para
@@ -39,14 +38,23 @@ revalidar regra de domínio.
 """
 import datetime as dt
 import json
-import os
+import logging
+import time
+import uuid
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.openapi.utils import get_openapi
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from src.api.auth import (
+    AccessIndisponivel,
+    AccessTokenInvalido,
+    CognitoAccessValidator,
+)
 from src.api.escrita import router as escrita_router
-from src.config import get_settings
+from src.config import ApiSettings, get_api_settings, get_brapi_settings
 from src.db.connection import get_connection
 from src.earnings.models import faixa_de_confianca
 from src.etl.budget import requests_gastos_hoje
@@ -59,12 +67,44 @@ from src.market.valuation import (
     frescor_maximo_horas,
     visao_carteira,
 )
+from src.observability.logging import log_context
 from src.strategy.covered import politica_resultado_desconhecido
 from src.strategy.outcome_repository import ultima_execucao_do_dia
 
-#: Origem do dev server do Vite. Configurável, mas nunca "*": inofensivo em
-#: localhost hoje, perigoso no dia em que alguém publicar sem revisar.
-ORIGEM_INTERFACE = os.getenv("OPCOES_IA_WEB_ORIGIN", "http://localhost:5173")
+log = logging.getLogger("api")
+API_SETTINGS = get_api_settings()
+
+# Somente estes sinais são públicos em produção. O método faz parte da chave:
+# um POST acidental no mesmo path não ganha a exceção.
+_ROTAS_PUBLICAS = frozenset({
+    ("GET", "/health/live"),
+    ("GET", "/health/ready"),
+})
+
+
+class _CorsPorAmbiente:
+    """Aplica a origem do runtime; a indireção também torna o teste isolável."""
+
+    def __init__(self, asgi_app, settings_provider) -> None:
+        self._app = asgi_app
+        self._settings_provider = settings_provider
+        self._por_origem = {}
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+        origem = self._settings_provider().web_origin
+        cors = self._por_origem.get(origem)
+        if cors is None:
+            cors = CORSMiddleware(
+                self._app,
+                allow_origins=[origem],
+                allow_methods=["GET", "POST", "OPTIONS"],
+                allow_headers=["*"],
+            )
+            self._por_origem[origem] = cors
+        await cors(scope, receive, send)
 
 app = FastAPI(
     title="opcoes-ia — carteira",
@@ -77,14 +117,101 @@ app = FastAPI(
     ),
     version="0.2.0",
 )
+app.state.api_settings = API_SETTINGS
+app.state.token_validator = (
+    CognitoAccessValidator(API_SETTINGS) if API_SETTINGS.production else None
+)
+
+
+@app.middleware("http")
+async def correlacionar_requisicao(request: Request, call_next):
+    request_id = request.headers.get("x-request-id", "").strip()[:128]
+    request_id = request_id or str(uuid.uuid4())
+    inicio = time.perf_counter()
+    with log_context(request_id=request_id):
+        try:
+            settings: ApiSettings = request.app.state.api_settings
+            origem = request.headers.get("origin")
+            preflight = (
+                request.method == "OPTIONS"
+                and bool(origem)
+                and bool(request.headers.get("access-control-request-method"))
+            )
+            if (
+                settings.production
+                and not preflight
+                and origem
+                and origem.rstrip("/") != settings.web_origin
+            ):
+                response = JSONResponse(
+                    status_code=403, content={"detail": "origem não permitida"}
+                )
+            elif (
+                settings.production
+                and not preflight
+                and (request.method, request.url.path) not in _ROTAS_PUBLICAS
+            ):
+                authorization = request.headers.get("Authorization", "").strip()
+                scheme, _, token = authorization.partition(" ")
+                token = token.strip() if scheme.lower() == "bearer" else ""
+                validator = request.app.state.token_validator
+                if not token:
+                    response = JSONResponse(
+                        status_code=401,
+                        content={"detail": "access token Cognito ausente"},
+                    )
+                elif validator is None:
+                    response = JSONResponse(
+                        status_code=503,
+                        content={"detail": "validação de identidade indisponível"},
+                    )
+                else:
+                    try:
+                        validator.validar(token)
+                    except AccessTokenInvalido:
+                        response = JSONResponse(
+                            status_code=401,
+                            content={"detail": "access token Cognito inválido"},
+                        )
+                    except AccessIndisponivel:
+                        response = JSONResponse(
+                            status_code=503,
+                            content={"detail": "validação de identidade indisponível"},
+                        )
+                    else:
+                        response = await call_next(request)
+            else:
+                response = await call_next(request)
+        except Exception:  # noqa: BLE001 - registra e preserva o handler HTTP
+            log.exception(
+                "Requisição falhou",
+                extra={
+                    "result": "error",
+                    "duration_ms": round((time.perf_counter() - inicio) * 1000, 2),
+                    "http_method": request.method,
+                    "http_path": request.url.path,
+                    "status_code": 500,
+                },
+            )
+            raise
+        response.headers["X-Request-ID"] = request_id
+        log.info(
+            "Requisição concluída",
+            extra={
+                "result": "error" if response.status_code >= 500 else "success",
+                "duration_ms": round((time.perf_counter() - inicio) * 1000, 2),
+                "http_method": request.method,
+                "http_path": request.url.path,
+                "status_code": response.status_code,
+            },
+        )
+        return response
+
+# CORS fica por fora da autenticação para uma resposta 401 ainda ser legível
+# pela interface autorizada. OPTIONS é encerrado aqui e nunca alcança domínio.
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[ORIGEM_INTERFACE],
-    # POST entrou com a escrituração da carteira. Continua sem DELETE:
-    # encerrar posição é UPDATE em `fechada_em`, porque o histórico é o que
-    # permite explicar uma decisão passada meses depois.
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
+    _CorsPorAmbiente,
+    settings_provider=lambda: app.state.api_settings,
 )
 
 app.include_router(escrita_router)
@@ -556,7 +683,49 @@ class ParametrosResposta(BaseModel):
     politica_resultado_desconhecido: str
 
 
+class HealthResposta(BaseModel):
+    status: str = Field(description="disponivel | indisponivel")
+    componente: str
+
+
 # --- Endpoints --------------------------------------------------------------
+
+@app.get(
+    "/health/live",
+    response_model=HealthResposta,
+    tags=["saude"],
+    summary="Liveness do runtime",
+)
+def health_live() -> HealthResposta:
+    """Prova apenas que o processo HTTP responde; não abre conexão."""
+    return HealthResposta(status="disponivel", componente="api")
+
+
+@app.get(
+    "/health/ready",
+    response_model=HealthResposta,
+    responses={503: {"model": HealthResposta}},
+    tags=["saude"],
+    summary="Disponibilidade do Neon",
+)
+def health_ready():
+    """Executa somente ``SELECT 1`` e distingue runtime vivo de Neon fora."""
+    try:
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            pronto = cur.fetchone() == (1,)
+    except Exception:  # noqa: BLE001 - saúde não expõe detalhe/DSN da conexão
+        log.warning("Neon indisponível no readiness", extra={"result": "error"})
+        pronto = False
+
+    resposta = HealthResposta(
+        status="disponivel" if pronto else "indisponivel",
+        componente="neon",
+    )
+    if not pronto:
+        return JSONResponse(status_code=503, content=resposta.model_dump())
+    return resposta
+
 
 @app.get("/carteira", response_model=CarteiraResposta)
 def carteira() -> CarteiraResposta:
@@ -844,7 +1013,7 @@ def saude_coleta() -> SaudeColetaResposta:
         cur.execute("SELECT MAX(executado_em) FROM desfecho_avaliacao")
         ultima_avaliacao = cur.fetchone()[0]
 
-        limite = get_settings().brapi_requests_dia_maximo
+        limite = get_brapi_settings().brapi_requests_dia_maximo
         gastos = requests_gastos_hoje(cur)
 
         automacao = _automacao(cur, hoje)
@@ -1236,3 +1405,36 @@ def parametros() -> ParametrosResposta:
         cotacao_frescor_maximo_horas=frescor_maximo_horas(params),
         politica_resultado_desconhecido=politica_resultado_desconhecido(params),
     )
+
+
+def _openapi_hospedado() -> dict:
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    schema.setdefault("components", {}).setdefault("securitySchemes", {})[
+        "CognitoAccessToken"
+    ] = {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Access token Cognito com o escopo configurado da API.",
+    }
+    for caminho, item in schema["paths"].items():
+        for metodo, operacao in item.items():
+            if metodo.upper() not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+                continue
+            operacao["security"] = (
+                []
+                if (metodo.upper(), caminho) in _ROTAS_PUBLICAS
+                else [{"CognitoAccessToken": []}]
+            )
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = _openapi_hospedado

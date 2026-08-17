@@ -10,3 +10,11 @@ reports/*
 !reports/.gitkeep
 .claude/settings.local.json
 openapi.json  # gerado por python -m src.api --schema; o versionado é o .d.ts no opcoes-ia-web
+
+# Terraform working data and local plans; provider lock files stay versioned.
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log

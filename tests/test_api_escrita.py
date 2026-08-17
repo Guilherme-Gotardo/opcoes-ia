@@ -175,7 +175,7 @@ def test_watchlist_mostra_o_custo_junto_da_lista():
     with patch.object(escrita, "tickers_vigiados", return_value=["ITUB4", "BBAS3"]), \
          patch.object(escrita, "universo_de_analise",
                       return_value=["BBAS3", "ITUB4", "PETR4"]), \
-         patch.object(escrita, "get_settings",
+         patch.object(escrita, "get_brapi_settings",
                       return_value=SimpleNamespace(brapi_requests_dia_maximo=600)):
         corpo = cliente.get("/watchlist").json()
 

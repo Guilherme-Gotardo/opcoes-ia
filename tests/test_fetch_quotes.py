@@ -9,6 +9,7 @@ import pytest
 
 from src.etl import fetch_quotes
 from src.etl.fetch_quotes import FormatoRespostaInvalido, _extrair_campos, main, upsert
+from src.etl.result import EstadoAlvo, EstadoColeta, ResultadoColeta
 
 COTACAO_VALIDA = {
     "requestedSymbol": "PETR4",
@@ -110,31 +111,43 @@ def test_main_isola_falha_por_ticker(caplog):
     cursor = _FakeCursor()
     fake_conn = _FakeConnection(cursor)
     with patch("src.etl.fetch_quotes.get_connection", _patched_get_connection(fake_conn)), \
-         patch.object(fetch_quotes, "get_settings", return_value=_FakeSettings()), \
+         patch.object(fetch_quotes, "get_brapi_settings", return_value=_FakeSettings()), \
          patch.object(fetch_quotes, "orcamento_restante_hoje", return_value=1000), \
          patch.object(fetch_quotes, "tickers_cadastrados", side_effect=_todos_cadastrados), \
          patch.object(fetch_quotes, "fetch_um", side_effect=fake_fetch_um), \
          patch.object(fetch_quotes, "upsert", return_value=1) as mock_upsert:
-        main(tickers=["PETR4", "VALE3", "ITUB4"])
+        resultado = main(tickers=["PETR4", "VALE3", "ITUB4"])
 
     # PETR4 e ITUB4 continuam sendo processados mesmo com VALE3 falhando
     processados = [call.args[0][0]["symbol"] for call in mock_upsert.call_args_list]
     assert processados == ["PETR4", "ITUB4"]
+    assert isinstance(resultado, ResultadoColeta)
+    assert resultado.estado == EstadoColeta.PARCIAL
+    falha = next(item for item in resultado.detalhes if item.ticker == "VALE3")
+    assert falha.estado == EstadoAlvo.FALHA
+    assert falha.codigo_motivo == "falha_coleta"
 
 
 def test_main_respeita_orcamento_diario(caplog):
     with patch("src.etl.fetch_quotes.get_connection", _patched_get_connection(_FakeConnection(_FakeCursor()))), \
-         patch.object(fetch_quotes, "get_settings", return_value=_FakeSettings()), \
+         patch.object(fetch_quotes, "get_brapi_settings", return_value=_FakeSettings()), \
          patch.object(fetch_quotes, "orcamento_restante_hoje", return_value=1), \
          patch.object(fetch_quotes, "tickers_cadastrados", side_effect=_todos_cadastrados), \
          patch.object(fetch_quotes, "fetch_um", return_value=COTACAO_VALIDA) as mock_fetch, \
          patch.object(fetch_quotes, "upsert", return_value=1):
-        main(tickers=["PETR4", "VALE3", "ITUB4"])
+        resultado = main(tickers=["PETR4", "VALE3", "ITUB4"])
 
     # só o primeiro ticker cabe no orçamento (restante=1) — os outros dois
     # ficam de fora, sem nenhuma chamada à Brapi para eles
     chamados = [call.args[0] for call in mock_fetch.call_args_list]
     assert chamados == ["PETR4"]
+    excluidos = [
+        item for item in resultado.detalhes
+        if item.estado == EstadoAlvo.NAO_EXECUTADO
+    ]
+    assert [item.ticker for item in excluidos] == ["VALE3", "ITUB4"]
+    assert {item.codigo_motivo for item in excluidos} == {"orcamento_insuficiente"}
+    assert not any(item.tentado for item in excluidos)
 
 
 def test_ticker_nao_cadastrado_nao_derruba_os_demais(caplog):
@@ -145,12 +158,12 @@ def test_ticker_nao_cadastrado_nao_derruba_os_demais(caplog):
     fake_conn = _FakeConnection(cursor)
     with caplog.at_level(logging.ERROR), \
          patch("src.etl.fetch_quotes.get_connection", _patched_get_connection(fake_conn)), \
-         patch.object(fetch_quotes, "get_settings", return_value=_FakeSettings()), \
+         patch.object(fetch_quotes, "get_brapi_settings", return_value=_FakeSettings()), \
          patch.object(fetch_quotes, "orcamento_restante_hoje", return_value=1000), \
          patch.object(fetch_quotes, "tickers_cadastrados", return_value={"PETR4"}), \
          patch.object(fetch_quotes, "fetch_um", side_effect=lambda t: dict(COTACAO_VALIDA, symbol=t)), \
          patch.object(fetch_quotes, "upsert", return_value=1) as mock_upsert:
-        main(tickers=["PETR4", "XXXX9"])
+        resultado = main(tickers=["PETR4", "XXXX9"])
 
     processados = [call.args[0][0]["symbol"] for call in mock_upsert.call_args_list]
     assert processados == ["PETR4"], "o cadastrado continua sendo coletado"
@@ -160,14 +173,35 @@ def test_ticker_nao_cadastrado_nao_derruba_os_demais(caplog):
     assert "não cadastrado" in texto
     assert "src.assets.manage add" in texto, "precisa dizer como resolver"
     assert "cotacoes_ticker_fkey" not in texto, "erro cru do banco não vaza"
+    nao_executado = next(
+        item for item in resultado.detalhes if item.ticker == "XXXX9"
+    )
+    assert nao_executado.estado == EstadoAlvo.NAO_EXECUTADO
+    assert nao_executado.codigo_motivo == "ativo_nao_cadastrado"
+    assert resultado.estado == EstadoColeta.PARCIAL
 
 
 def test_nenhum_ticker_cadastrado_encerra_sem_gastar_request():
     with patch("src.etl.fetch_quotes.get_connection", _patched_get_connection(_FakeConnection(_FakeCursor()))), \
-         patch.object(fetch_quotes, "get_settings", return_value=_FakeSettings()), \
+         patch.object(fetch_quotes, "get_brapi_settings", return_value=_FakeSettings()), \
          patch.object(fetch_quotes, "orcamento_restante_hoje", return_value=1000), \
          patch.object(fetch_quotes, "tickers_cadastrados", return_value=set()), \
          patch.object(fetch_quotes, "fetch_um") as mock_fetch:
-        main(tickers=["XXXX9"])
+        resultado = main(tickers=["XXXX9"])
 
     mock_fetch.assert_not_called()
+    assert resultado.estado == EstadoColeta.FALHA
+    assert resultado.alvos_nao_executados == 1
+
+
+def test_lista_vazia_explicita_nao_carrega_universo():
+    with patch.object(fetch_quotes, "_tickers_da_carteira") as universo, \
+         patch.object(fetch_quotes, "get_connection") as conexao, \
+         patch.object(fetch_quotes, "fetch_um") as fetch:
+        resultado = main(tickers=[])
+
+    universo.assert_not_called()
+    conexao.assert_not_called()
+    fetch.assert_not_called()
+    assert resultado.estado == EstadoColeta.PULADO
+    assert resultado.motivo == "universo_vazio"

@@ -1,0 +1,7 @@
+# Ambiente local completo: os dois runtimes mais ferramentas de desenvolvimento.
+-r api.in
+-r operations.in
+
+httpx>=0.27,<1
+pytest>=8,<10
+uvicorn>=0.30,<1

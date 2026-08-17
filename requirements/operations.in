@@ -1,0 +1,8 @@
+# Dependencias diretas do runtime Fargate (Python 3.12, linux/amd64).
+anthropic>=0.122,<1
+psycopg[binary]>=3.2,<4
+python-dotenv>=1,<2
+PyYAML>=6,<7
+QuantLib>=1.43,<2
+requests>=2.32,<3
+yfinance>=0.2,<2
