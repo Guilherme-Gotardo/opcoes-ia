@@ -80,6 +80,7 @@ jobs:
         uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: opcoes-ia-api:ci
+          version: v0.74.0
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
@@ -87,6 +88,7 @@ jobs:
         uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: opcoes-ia-operations:ci
+          version: v0.74.0
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"

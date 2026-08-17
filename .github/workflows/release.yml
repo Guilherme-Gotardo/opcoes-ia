@@ -120,6 +120,7 @@ jobs:
         uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: opcoes-ia-prod-api:${{ env.RELEASE_TAG }}
+          version: v0.74.0
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
@@ -128,6 +129,7 @@ jobs:
         uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: opcoes-ia-prod-operations:${{ env.RELEASE_TAG }}
+          version: v0.74.0
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
