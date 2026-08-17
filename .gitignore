@@ -16,5 +16,6 @@ openapi.json  # gerado por python -m src.api --schema; o versionado é o .d.ts n
 *.tfstate
 *.tfstate.*
 *.tfplan
+tfplan-*
 crash.log
 crash.*.log
