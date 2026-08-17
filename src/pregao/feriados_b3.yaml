@@ -1,0 +1,90 @@
+# Calendário de pregão da B3 — feriados e horário da sessão.
+#
+# PROCEDÊNCIA, POR ANO
+# --------------------
+# 2026 foi CONFERIDO contra o calendário oficial da B3 (via BrasilAPI) em
+# 2026-08-16. 2027 e 2028 são DERIVADOS das regras publicadas por
+# `python -m src.pregao.derivar` — feriados nacionais de data fixa, os
+# móveis ancorados na Páscoa, e os dois dias em que a B3 não abre por
+# decisão própria (24/12 e 31/12).
+#
+# A derivação não é chute: rodada sobre 2026, ela reproduz exatamente as 14
+# datas da lista conferida, sem sobra nem falta. Isso é evidência de que a
+# regra está certa — não é o mesmo que ter conferido 2027 e 2028, e por isso
+# eles seguem fora de `conferido.anos`. `/saude-coleta` mostra essa
+# diferença: derivado não pode passar por confirmado (mesma disciplina de
+# `earnings`, onde estimativa nunca sobrescreve confirmação).
+#
+# COMO ESTENDER
+# -------------
+#   python -m src.pregao.derivar 2026 2029 > src/pregao/feriados_b3.yaml
+# depois confira o ano novo contra a fonte e acrescente-o a `conferido.anos`.
+# Feriado que cai em fim de semana não entra: sábado e domingo já são fora
+# de pregão antes de a lista ser consultada (ex.: Proclamação da República
+# em 2026-11-15 cai num domingo).
+#
+# Consultar uma data FORA da vigência levanta `CalendarioVencido` — nunca
+# "não é feriado". Sem a lista, um feriado viraria dia normal e o pipeline
+# avaliaria a carteira contra a cotação de outro dia.
+
+fonte: "https://brasilapi.com.br/api/feriados/v1 (calendário oficial da B3)"
+
+conferido:
+  em: 2026-08-16
+  anos: [2026]
+
+vigencia:
+  de: 2026-01-01
+  ate: 2028-12-31
+
+# Sessão regular do mercado à vista. Fica aqui, e não em código, porque o
+# horário da B3 já mudou e mudará de novo — e quem opera precisa ajustar a
+# janela sem editar Python. O after-market fica de fora de propósito: ele
+# não forma o preço que a avaliação usa.
+sessao:
+  fuso: "America/Sao_Paulo"
+  abertura: "10:00"
+  fechamento: "17:00"
+
+feriados:
+  # 2026 — conferido
+  2026-01-01: "Confraternização Universal"
+  2026-02-16: "Carnaval (segunda-feira)"
+  2026-02-17: "Carnaval (terça-feira)"
+  2026-04-03: "Sexta-feira Santa"
+  2026-04-21: "Tiradentes"
+  2026-05-01: "Dia do Trabalho"
+  2026-06-04: "Corpus Christi"
+  2026-09-07: "Independência do Brasil"
+  2026-10-12: "Nossa Senhora Aparecida"
+  2026-11-02: "Finados"
+  2026-11-20: "Dia da Consciência Negra"
+  2026-12-24: "Véspera de Natal (B3 sem pregão)"
+  2026-12-25: "Natal"
+  2026-12-31: "Véspera de Ano-Novo (B3 sem pregão)"
+  # 2027 — derivado, não conferido
+  2027-01-01: "Confraternização Universal"
+  2027-02-08: "Carnaval (segunda-feira)"
+  2027-02-09: "Carnaval (terça-feira)"
+  2027-03-26: "Sexta-feira Santa"
+  2027-04-21: "Tiradentes"
+  2027-05-27: "Corpus Christi"
+  2027-09-07: "Independência do Brasil"
+  2027-10-12: "Nossa Senhora Aparecida"
+  2027-11-02: "Finados"
+  2027-11-15: "Proclamação da República"
+  2027-12-24: "Véspera de Natal (B3 sem pregão)"
+  2027-12-31: "Véspera de Ano-Novo (B3 sem pregão)"
+  # 2028 — derivado, não conferido
+  2028-02-28: "Carnaval (segunda-feira)"
+  2028-02-29: "Carnaval (terça-feira)"
+  2028-04-14: "Sexta-feira Santa"
+  2028-04-21: "Tiradentes"
+  2028-05-01: "Dia do Trabalho"
+  2028-06-15: "Corpus Christi"
+  2028-09-07: "Independência do Brasil"
+  2028-10-12: "Nossa Senhora Aparecida"
+  2028-11-02: "Finados"
+  2028-11-15: "Proclamação da República"
+  2028-11-20: "Dia da Consciência Negra"
+  2028-12-25: "Natal"

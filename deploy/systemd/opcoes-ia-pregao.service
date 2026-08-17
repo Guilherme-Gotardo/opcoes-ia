@@ -1,0 +1,56 @@
+# Um disparo do pipeline de pregão. Instalação: ver docs/PREGAO.md.
+#
+# É uma unidade de USUÁRIO (~/.config/systemd/user/), não de sistema: o
+# pipeline não precisa de root, e rodar como o próprio usuário mantém o
+# segredo (ANTHROPIC_API_KEY, BRAPI_TOKEN, DATABASE_URL) fora de qualquer
+# arquivo legível por outras contas.
+
+[Unit]
+Description=opcoes-ia — disparo do pipeline de pregão (cotação + avaliação)
+# Sem Documentation=: o caminho do repositório tem espaços e um file:// com
+# espaço é URL inválida — o systemd a descarta com um aviso. O ponteiro para
+# docs/PREGAO.md está no comentário do topo, que ninguém precisa parsear.
+# Sem rede, o fetch_quotes falha e a execução vira 'falhou' com o motivo. É
+# tolerável, mas evitável: esperar a rede transforma um falso alarme diário
+# em nenhum alarme.
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+
+# ATENÇÃO: o caminho tem espaços ("Área de trabalho"), e a regra de aspas
+# NÃO é a mesma em todas as chaves — é por chave, conforme ela seja um valor
+# único ou uma lista:
+#   WorkingDirectory=  valor único  -> SEM aspas (com aspas, elas viram
+#                                      parte do caminho e a unidade nem sobe)
+#   ExecStart=         lista        -> COM aspas no executável
+#   ReadWritePaths=    lista        -> COM aspas
+WorkingDirectory=%h/Área de trabalho/projetos/opcoes-ia
+ExecStart="%h/Área de trabalho/projetos/opcoes-ia/.venv/bin/python" -m scripts.rodar_pregao --gatilho systemd
+
+# Segredos FORA do repositório, com permissão 600 — o repo é versionado e
+# um .env commitado por engano é irreversível num histórico compartilhado.
+EnvironmentFile=%h/.config/opcoes-ia/env
+
+# O script já captura a exceção e grava 'falhou' em execucao_pipeline com o
+# traceback, então o journald é a segunda cópia, não a única.
+StandardOutput=journal
+StandardError=journal
+
+# Um disparo normal leva segundos. 10 min é folga larga para a lentidão da
+# API; passou disso, alguma coisa travou e é melhor matar do que deixar dois
+# disparos concorrendo pelo mesmo orçamento de requests.
+TimeoutStartSec=600
+
+# Endurecimento barato: o processo só precisa ler o repo e falar com a rede.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# ...exceto o próprio repositório, porque `report/daily.py` escreve em
+# reports/ e o virtualenv precisa gravar __pycache__.
+# Aspas obrigatórias: ReadWritePaths= é uma LISTA separada por espaço, e sem
+# elas o caminho vira três entradas relativas que o systemd descarta — o
+# endurecimento passaria a valer com o repositório somente-leitura.
+ReadWritePaths="%h/Área de trabalho/projetos/opcoes-ia"

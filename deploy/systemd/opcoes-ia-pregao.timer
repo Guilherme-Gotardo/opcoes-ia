@@ -1,0 +1,46 @@
+# Cadência dos disparos em pregão. Instalação: ver docs/PREGAO.md.
+#
+# A JANELA AQUI É GROSSA DE PROPÓSITO
+# -----------------------------------
+# O timer não sabe de feriado — quem sabe é `src/pregao/calendario.py`. Um
+# feriado disparado aqui vira uma linha 'pulado_fora_de_pregao' no log, que
+# custa milissegundos e nenhum request. Duplicar o calendário em expressão
+# de OnCalendar criaria uma segunda verdade sobre o que é dia útil, e as
+# duas divergiriam no primeiro feriado móvel.
+#
+# CADÊNCIA É ORÇAMENTO
+# --------------------
+# Cada disparo gasta 1 request por ticker do universo (carteira ∪ vigiados).
+# As 14 janelas abaixo × 20 tickers = 280 requests/dia dos 600 do plano
+# Free. Aumentar a cadência OU a watchlist consome o mesmo orçamento — são o
+# mesmo botão. A conta está em docs/PREGAO.md.
+
+[Unit]
+Description=opcoes-ia — agenda dos disparos de pregão (B3)
+
+[Timer]
+Unit=opcoes-ia-pregao.service
+
+# De 30 em 30 minutos, das 10h às 16h30, mais um disparo às 17h para pegar o
+# fechamento. 14 disparos por dia útil.
+#
+# O fuso vai no PRÓPRIO OnCalendar (systemd >= 252). Não existe chave
+# `Timezone=` em [Timer] — escrevê-la é aceito em silêncio como "Unknown
+# key, ignoring" e o timer passa a seguir o fuso da máquina. Numa máquina em
+# UTC isso desloca a janela inteira em 3 horas: os disparos cairiam de
+# madrugada, o calendário pularia todos por "antes da abertura", e o dia
+# inteiro passaria sem sugestão nenhuma e sem um único erro.
+OnCalendar=Mon..Fri *-*-* 10..16:00/30 America/Sao_Paulo
+OnCalendar=Mon..Fri *-*-* 17:00 America/Sao_Paulo
+
+# Persistent=false de propósito: com true, um disparo perdido (máquina
+# desligada) rodaria no boot seguinte — possivelmente às 2h da manhã, sobre
+# a cotação do dia anterior. O calendário barraria, mas o certo é não pedir.
+Persistent=false
+
+# Evita bater na API exatamente no segundo cheio.
+RandomizedDelaySec=60
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

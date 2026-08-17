@@ -317,3 +317,29 @@ CREATE TABLE IF NOT EXISTS caixa_lancamentos (
 
 CREATE INDEX IF NOT EXISTS idx_caixa_ocorrido
     ON caixa_lancamentos (ocorrido_em DESC);
+
+-- Log de execução do pipeline de pregão (migração 007).
+-- Criado originalmente pela migração 007_execucao_pipeline.sql; replicado
+-- aqui para que um banco novo saia idêntico a um migrado (ver
+-- src/db/migrations/README.md). O raciocínio completo está na migração.
+--
+-- É o único lugar do projeto onde EXECUÇÃO vira estado consultável: cada
+-- disparo grava uma linha (executado / pulado_fora_de_pregao / falhou).
+-- A linha é aberta antes do trabalho, então `executando` com `encerrado_em`
+-- NULL é um processo que morreu no meio — o rastro de "crashou".
+CREATE TABLE IF NOT EXISTS execucao_pipeline (
+    id              BIGSERIAL PRIMARY KEY,
+    iniciado_em     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    encerrado_em    TIMESTAMPTZ,
+    -- 30, não 20: 'pulado_fora_de_pregao' tem 21 caracteres (ver migração).
+    status          VARCHAR(30) NOT NULL,
+    gatilho         VARCHAR(30) NOT NULL DEFAULT 'manual',
+    detalhe         JSONB,
+
+    CONSTRAINT execucao_pipeline_status_valido CHECK (
+        status IN ('executando', 'executado', 'pulado_fora_de_pregao', 'falhou')
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_execucao_pipeline_inicio
+    ON execucao_pipeline (iniciado_em DESC);
