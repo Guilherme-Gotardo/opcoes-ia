@@ -552,12 +552,18 @@ docker compose up -d db
       `intraday`, `daily` e `alert` foram executados em 2026-08-17. Depois do
       corte que confirmou ausência de timers locais, os três schedules foram
       habilitados. Ver `docs/RUNBOOK-CLOUD.md`
-- [ ] **Cutover serverless aguarda observação agendada**: quota Lambda
+- [x] **Cutover serverless validado**: quota Lambda
       efetiva subiu para 1000 e reserved concurrency 20 foi aplicada após o
       smoke com 2 produzir 20 throttles/5xx. SMTP não está configurado e ainda
       falta observar uma rodada agendada completa. Frontend CloudFront,
       subscription SNS e login Cognito/PKCE foram validados; timers systemd
-      permanecem apenas como fallback
+      permanecem apenas como fallback. Um intraday EventBridge real concluiu
+      com exit 0; por decisão do titular, daily/alert naturais não foram
+      aguardados porque ambos já tinham smoke manual na mesma task definition
+- [ ] **Custo AWS precisa de observação no primeiro mês**: em 2026-08-17 o
+      Budget mostrava USD 1,387 atual e USD 2,527 projetado contra teto USD 5.
+      Há 20 alarmes CloudWatch ainda sem custo observado; Brapi, Anthropic e
+      Neon não entram nesse orçamento
 - [ ] **Scan da imagem operacional tem risco residual sem correção**: a base
       Trixie atual reduziu para 4 CRITICAL e 8 HIGH, todos sem
       `fixed_in_version` no ECR em 2026-08-17. O release bloqueia severidade

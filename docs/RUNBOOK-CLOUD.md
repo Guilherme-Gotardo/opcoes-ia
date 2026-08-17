@@ -403,6 +403,10 @@ Validado primeiro em producao com schedules desabilitados:
   leitura paralela e rollback da escrita concluiram sem 503.
 - Intraday Fargate concluiu com exit 0 e persistiu a execucao
   `6c346eb5-b68e-4393-9e60-eb16fa0c91b3`.
+- O primeiro disparo EventBridge real das 15h concluiu com exit 0, execution ID
+  `e7508125-0550-4090-bf91-9bd9e6618bf2`, uma unica linha para a janela,
+  cotacoes 2/2 e proxy Brapi 6/600. Por decisao do titular, daily/alert naturais
+  nao foram aguardados; os dois ja tinham smoke manual na mesma task definition.
 - Daily concluiu o container com exit 0/estado parcial, persistiu relatorio e fez
   chamada Anthropic real; OpLab e NewsAPI locais responderam 401 e foram
   desabilitados no secret de producao.
@@ -436,3 +440,10 @@ conta ainda limita a funcao a 10. O cutover e a release normal usam 20 depois
 da aprovacao. Aumento de quota e reserved
 concurrency nao geram custo por si; provisioned concurrency, que nao e usado
 aqui, geraria.
+
+Na consulta de 2026-08-17, o Budget informou gasto atual USD 1,387 e forecast
+USD 2,527 contra limite USD 5. Secrets Manager (USD 0,839) e EC2 Other
+(USD 0,378) eram os maiores itens; S3 era USD 0,00007. Existem 20 alarmes
+CloudWatch, ainda sem custo observado, portanto o forecast deve continuar sendo
+acompanhado ate completar o primeiro mes. Brapi, Anthropic e Neon nao fazem
+parte desse Budget AWS.

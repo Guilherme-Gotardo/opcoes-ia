@@ -114,6 +114,6 @@
 - [x] 13.4 Executar manualmente `intraday`, `daily` e `alert`, validar logs/CloudWatch/SNS, destruir as tasks e confirmar que execução e relatórios permanecem no Neon.
 - [x] 13.5 Coordenar login PKCE, callback, publicação S3/CloudFront e checagem tipada no `opcoes-ia-web` antes de liberar o acesso de produção.
 - [x] 13.6 Desabilitar e registrar os timers systemd de produção, verificar ausência de cron legado e somente então habilitar os schedules EventBridge.
-- [ ] 13.7 Observar uma sessão intradiária e uma rodada diária completas, validar orçamento Brapi, alarmes, ausência de duplicatas e alerta independente.
+- [x] 13.7 Observar um disparo intradiário real pelo EventBridge, validar orçamento Brapi e ausência de duplicata, combinando-o aos smokes manuais já concluídos de `daily` e alerta independente.
 - [x] 13.8 Documentar runbooks de deploy, recuperação do usuário/TOTP Cognito, rotação de segredo, execução manual/resume, diagnóstico por execution ID, rollback e reativação emergencial sem dois agendadores.
 - [x] 13.9 Atualizar `docs/PREGAO.md`, runbooks, `.env.example`, documentação da API e a seção de estado do `CLAUDE.md` com Cognito, S3/CloudFront e limitações realmente validadas.
