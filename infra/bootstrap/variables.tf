@@ -54,6 +54,19 @@ variable "github_environment" {
   }
 }
 
+# Not a secret: it is the address the deploy role may manage as a sending
+# identity, and it scopes that permission to exactly one identity ARN.
+variable "sender_address" {
+  description = "Address the deploy role may manage as an SES sending identity."
+  type        = string
+  default     = "guilher.gotardo@gmail.com"
+
+  validation {
+    condition     = can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.sender_address))
+    error_message = "sender_address must be a single email address."
+  }
+}
+
 variable "project_name" {
   description = "Stable project identifier used in resource names and tags."
   type        = string

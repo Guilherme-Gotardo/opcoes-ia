@@ -69,6 +69,14 @@ module "api" {
   tags                   = local.common_tags
 }
 
+module "notifications" {
+  source = "../../modules/notifications"
+
+  name_prefix    = "${var.project_name}-${var.environment}"
+  sender_address = var.smtp_from
+  tags           = local.common_tags
+}
+
 module "operations" {
   source = "../../modules/operations"
 
@@ -86,7 +94,7 @@ module "operations" {
   smtp_port             = var.smtp_port
   smtp_user             = var.smtp_user
   smtp_from             = var.smtp_from
-  smtp_to               = var.notification_email
+  smtp_to               = var.smtp_to
   tags                  = local.common_tags
 }
 

@@ -56,8 +56,11 @@ para `localhost` e vir um banco vazio, é isso: não é perda de dado.
 
 ## Ligar aos runtimes hospedados
 
-1. Grave a URL direta como `NEON_DIRECT_DATABASE_URL` no GitHub Environment
-   `Principal`; somente o job de migração a recebe.
+1. Grave a URL **direta** como `DATABASE_URL` no GitHub Environment
+   `Principal`; somente o job de migração a recebe. O nome é o mesmo dos
+   containers de aplicação, mas o valor não: aqui é o host **sem** `-pooler`,
+   porque pelo pooler o advisory lock da migração deixa de excluir dois
+   bootstraps simultâneos. `src/db/bootstrap.py` recusa o endpoint pooled.
 2. Grave a URL pooled nos containers `opcoes-ia/prod/api` e
    `opcoes-ia/prod/operations` do Secrets Manager conforme
    `docs/RUNBOOK-CLOUD.md`.

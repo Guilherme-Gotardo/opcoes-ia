@@ -180,7 +180,10 @@ jobs:
       contents: read
       id-token: write
     env:
-      DATABASE_URL: ${{ secrets.NEON_DIRECT_DATABASE_URL }}
+      # Mesmo nome do secret dos containers, valor diferente por contexto: aqui
+      # e o endpoint DIRETO. Migracao pelo pooler perde a exclusao do advisory
+      # lock, e `src/db/bootstrap.py` recusa um host `-pooler` por isso.
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

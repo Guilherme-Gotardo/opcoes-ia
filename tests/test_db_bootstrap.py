@@ -89,6 +89,50 @@ def test_database_url_ausente_falha_com_codigo_nao_zero(monkeypatch, capsys):
     assert "DATABASE_URL" in capsys.readouterr().err
 
 
+# --- Endpoint pooled x direto ----------------------------------------------
+#
+# Os dois passaram a usar o mesmo nome de variável, então a única coisa que
+# separa "URL de aplicação" de "URL de migração" é esta checagem.
+
+def test_endpoint_pooled_e_recusado():
+    url = ("postgresql://u:s@ep-lively-firefly-actnx4rn-pooler.sa-east-1"
+           ".aws.neon.tech/neondb")
+    with pytest.raises(BootstrapError) as excinfo:
+        bootstrap.recusar_endpoint_pooled(url)
+    assert "POOLED" in str(excinfo.value)
+    assert "senha" not in str(excinfo.value) and ":s@" not in str(excinfo.value)
+
+
+def test_endpoint_direto_e_aceito():
+    url = "postgresql://u:s@ep-lively-firefly-actnx4rn.sa-east-1.aws.neon.tech/neondb"
+    bootstrap.recusar_endpoint_pooled(url)  # não levanta
+
+
+@pytest.mark.parametrize("host", [
+    "localhost",
+    "127.0.0.1",
+    "db",  # nome do serviço no docker compose
+])
+def test_banco_descartavel_nao_e_afetado(host):
+    """A convenção de rodar contra o banco local não pode ser quebrada."""
+    bootstrap.recusar_endpoint_pooled(f"postgresql://u:s@{host}:5433/opcoes_ia")
+
+
+def test_pooler_no_meio_do_nome_nao_e_falso_positivo():
+    """Só o sufixo de host do Neon conta, não a palavra em qualquer lugar."""
+    bootstrap.recusar_endpoint_pooled("postgresql://u:s@meu-pooler-db.exemplo/base")
+
+
+def test_url_pooled_falha_pelo_main(monkeypatch, capsys):
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://u:s@ep-abc-pooler.sa-east-1.aws.neon.tech/neondb",
+    )
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
+    assert bootstrap.main([]) != 0
+    assert "POOLED" in capsys.readouterr().err
+
+
 def test_destino_inacessivel_falha_com_codigo_nao_zero(monkeypatch, capsys):
     # Porta fechada de propósito: o erro precisa nomear o alvo, não sumir.
     monkeypatch.setenv(

@@ -180,8 +180,62 @@ def test_operations_are_ephemeral_public_ip_compatible_and_have_no_ingress() -> 
     assert 'memory                   = tostring(var.memory)' in source
     assert 'resource "aws_vpc_security_group_ingress_rule"' not in source
     assert 'assign_public_ip = "ENABLED"' in outputs
-    assert 'image     = local.image_uri' in source
+    # Casa a atribuição, não o alinhamento: terraform fmt realinha o bloco
+    # inteiro quando a maior chave muda de tamanho.
+    assert re.search(r"^\s*image\s+= local\.image_uri$", source, re.MULTILINE)
     assert 'logDriver = "awslogs"' in source
+
+
+def test_sending_identity_carries_no_credential_value() -> None:
+    """Terraform owns the identity and the principal, never the credential."""
+    module = (INFRA / "modules/notifications/main.tf").read_text(encoding="utf-8")
+    outputs = (INFRA / "modules/notifications/outputs.tf").read_text(encoding="utf-8")
+    # Comments explain why the attribute is avoided; the ban is on code.
+    code = "\n".join(
+        line
+        for line in (module + "\n" + outputs).splitlines()
+        if not line.lstrip().startswith("#")
+    )
+
+    # ses_smtp_password_v4 would put the SMTP password in the state file.
+    assert 'resource "aws_iam_access_key"' not in code
+    assert "ses_smtp_password_v4" not in code
+    assert 'resource "aws_sesv2_email_identity" "sender"' in module
+    assert 'resource "aws_iam_user" "smtp"' in module
+
+
+def test_send_only_policy_is_scoped_to_the_verified_identity() -> None:
+    module = (INFRA / "modules/notifications/main.tf").read_text(encoding="utf-8")
+
+    assert '"ses:SendRawEmail"' in module
+    assert "resources = [aws_sesv2_email_identity.sender.arn]" in module
+    assert 'variable = "ses:FromAddress"' in module
+    # Reading mail, or sending as anything else, must never be granted here.
+    for forbidden in ("ses:ReceiveMessage", "ses:CreateEmailIdentity", "ses:*"):
+        assert f'"{forbidden}"' not in module
+
+
+def test_deploy_role_cannot_mint_a_sending_credential() -> None:
+    bootstrap = (INFRA / "bootstrap/main.tf").read_text(encoding="utf-8")
+
+    assert '"iam:CreateUser"' in bootstrap
+    assert '"iam:CreateAccessKey"' not in bootstrap
+
+
+def test_smtp_host_and_recipient_are_injected_together_or_not_at_all() -> None:
+    """Half a channel is what took the alert flow down on 2026-08-17."""
+    operations = (INFRA / "modules/operations/main.tf").read_text(encoding="utf-8")
+    prod = (INFRA / "environments/prod/main.tf").read_text(encoding="utf-8")
+
+    assert 'smtp_enabled = var.smtp_host != "" && var.smtp_to != ""' in operations
+    assert "local.smtp_environment" in operations
+    assert re.search(
+        r'condition\s+=\s+\(var\.smtp_host != ""\) == \(var\.smtp_to != ""\)',
+        operations,
+    )
+    # The SNS budget/alarm recipient must not double as the SMTP recipient.
+    assert "smtp_to               = var.notification_email" not in prod
+    assert "smtp_to               = var.smtp_to" in prod
 
 
 def test_cognito_pkce_mfa_and_runtime_identity_contract() -> None:

@@ -552,14 +552,59 @@ docker compose up -d db
       `intraday`, `daily` e `alert` foram executados em 2026-08-17. Depois do
       corte que confirmou ausência de timers locais, os três schedules foram
       habilitados. Ver `docs/RUNBOOK-CLOUD.md`
+- [x] **Entrega por e-mail ligada no Amazon SES** (2026-08-17, change
+      `configure-ses-email-delivery`). O que derrubou o fluxo `alert` em
+      produção não foi só "SMTP não configurado": era a infra **fabricando**
+      meia configuração. `smtp_to = var.notification_email` reusava o
+      destinatário de orçamento/alarme do SNS como destinatário SMTP, então o
+      container subia com `SMTP_TO` preenchido e `SMTP_HOST` vazio — e
+      `ConfigSMTP.from_env()` trata metade como erro, de propósito. Agora
+      `smtp_to` é variável própria, host e destinatário são injetados **juntos
+      ou nenhum dos dois**, e um `precondition` no task definition recusa o
+      apply se só um estiver preenchido (a injeção condicional sozinha
+      trocaria a falha explícita por um canal desligado em silêncio).
+      Três decisões: (a) **SMTP e não a API do SES**, para que trocar de
+      provedor seja mudar quatro variáveis, não reescrever camada de envio;
+      (b) **a senha nunca entra no Terraform** — `aws_iam_access_key` exporia
+      `ses_smtp_password_v4` no state, então o módulo cria identidade e
+      usuário de envio-apenas e a chave nasce por canal administrativo local,
+      derivada por `scripts/ses_smtp_password.py`; a role de deploy
+      deliberadamente **não** tem `iam:CreateAccessKey`; (c) **fica no sandbox
+      do SES** (200 msgs/24h, só destinatário verificado), porque remetente e
+      destinatário são o mesmo endereço — o custo declarado é que
+      **destinatário novo exige verificar o endereço antes**.
+      Achado do caminho: a política inline da role de deploy estourou o limite
+      de 10.240 bytes da AWS, que é **agregado por role** — uma segunda inline
+      não resolveria, e as permissões do canal viraram managed policy
+      (`opcoes-ia-prod-deploy-notifications`). Runbook em
+      `docs/RUNBOOK-CLOUD.md`
 - [x] **Cutover serverless validado**: quota Lambda
       efetiva subiu para 1000 e reserved concurrency 20 foi aplicada após o
-      smoke com 2 produzir 20 throttles/5xx. SMTP não está configurado e ainda
+      smoke com 2 produzir 20 throttles/5xx. Ainda
       falta observar uma rodada agendada completa. Frontend CloudFront,
       subscription SNS e login Cognito/PKCE foram validados; timers systemd
       permanecem apenas como fallback. Um intraday EventBridge real concluiu
       com exit 0; por decisão do titular, daily/alert naturais não foram
       aguardados porque ambos já tinham smoke manual na mesma task definition
+- [x] **O secret da migração passou a se chamar `DATABASE_URL`** (2026-08-17),
+      igual ao dos containers — era `NEON_DIRECT_DATABASE_URL`. O nome é
+      comum; o **valor** é que difere, e a diferença é funcional: `bootstrap`
+      protege a migração com `pg_advisory_lock`, que é lock de SESSÃO. Medido
+      contra o Neon: pelo endpoint **pooled**, dois bootstraps concorrentes
+      adquirem o MESMO lock ao mesmo tempo e ambos seguem; pelo **direto**, o
+      segundo é barrado. Como unificar o nome apagou o único sinal visível
+      entre as duas URLs, `src/db/bootstrap.py` passou a **recusar** host com
+      `-pooler`. Efeito colateral aceito: rodar `python -m src.db.bootstrap`
+      com o `.env` apontando para a pooled agora falha — de propósito, e a
+      mensagem diz o que fazer
+- [ ] **Os endpoints Free da Brapi não validam o token** (medido em
+      2026-08-17): `quote/<ticker>`, `quote/list` e `available` devolvem `200`
+      com token válido, com token inventado e **sem token nenhum**. Duas
+      consequências: um `BRAPI_TOKEN` vazado não é verificável nem revogável
+      por teste de API — só pelo painel —, e nenhum teste de fumaça que use
+      esses endpoints prova que a credencial está certa. Quem validar
+      credencial da Brapi precisa de endpoint de plano pago, que é onde o
+      `403 FEATURE_NOT_AVAILABLE` aparece
 - [ ] **Custo AWS precisa de observação no primeiro mês**: em 2026-08-17 o
       Budget mostrava USD 1,387 atual e USD 2,527 projetado contra teto USD 5.
       Há 20 alarmes CloudWatch ainda sem custo observado; Brapi, Anthropic e

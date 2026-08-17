@@ -13,6 +13,16 @@ monthly_budget_usd            = 5
 
 ecr_release_images_to_keep = 10
 
+# Email channel. None of these is a secret: smtp_user is the access key ID, the
+# public half of the credential, like a username. Only SMTP_PASSWORD lives in
+# Secrets Manager. Host and recipient must be set together or both left empty —
+# a precondition on the task definition refuses the apply otherwise.
+smtp_from = "guilher.gotardo@gmail.com"
+smtp_host = "email-smtp.sa-east-1.amazonaws.com"
+smtp_port = 587
+smtp_user = "AKIAVDPWILIY72V5FZ7R"
+smtp_to   = "guilher.gotardo@gmail.com"
+
 scheduler_timezone           = "America/Sao_Paulo"
 schedules_enabled            = true
 intraday_schedule_expression = "cron(0/30 10-16 ? * MON-FRI *)"

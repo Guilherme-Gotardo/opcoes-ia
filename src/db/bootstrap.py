@@ -95,6 +95,30 @@ def arquivos_a_aplicar() -> list[Path]:
     return [SCHEMA, *migracoes()]
 
 
+def recusar_endpoint_pooled(url: str) -> None:
+    """Barra migração pelo endpoint pooled, onde o advisory lock não exclui.
+
+    `aplicar` protege a migração com `pg_advisory_lock`, que é um lock de
+    SESSÃO. Medido contra o Neon em 2026-08-17: pelo endpoint pooled, dois
+    bootstraps concorrentes adquirem o MESMO lock ao mesmo tempo e ambos
+    seguem em frente; pelo endpoint direto, o segundo é barrado como deveria.
+
+    A checagem existe porque a URL direta e a pooled passaram a usar o MESMO
+    nome de variável (`DATABASE_URL`), cada uma no seu contexto. Isso é
+    conveniente e remove o único sinal que distinguia as duas a olho nu — sem
+    esta barreira, colar a pooled aqui migraria sem exclusão nenhuma, e o
+    sintoma apareceria só numa corrida entre dois deploys.
+    """
+    host = urlsplit(url).hostname or ""
+    if "-pooler." in host:
+        raise BootstrapError(
+            f"{alvo_legivel(url)} é o endpoint POOLED. A migração precisa do "
+            "endpoint direto: pelo pooler o advisory lock não exclui dois "
+            "bootstraps simultâneos. Remova '-pooler' do host. O endpoint "
+            "pooled é o dos containers de aplicação, não o da migração."
+        )
+
+
 def _database_url() -> str:
     """Lê a URL administrativa direta usada somente pela migração.
 
@@ -110,6 +134,7 @@ def _database_url() -> str:
             "DATABASE_URL não está definida no ambiente. Copie .env.example "
             "para .env e preencha, ou exporte a variável antes de rodar."
         )
+    recusar_endpoint_pooled(url)
     return url
 
 

@@ -9,6 +9,27 @@ locals {
     "OPLAB_TOKEN",
     "SMTP_PASSWORD",
   ])
+
+  # The runtime treats a host without a recipient (or the reverse) as a hard
+  # error, on purpose: half a channel is worse than none. So host and recipient
+  # are injected together or not at all. Injecting a recipient on its own is
+  # what broke the alert flow in production on 2026-08-17.
+  smtp_enabled = var.smtp_host != "" && var.smtp_to != ""
+
+  smtp_environment = local.smtp_enabled ? [
+    { name = "SMTP_FROM", value = var.smtp_from },
+    { name = "SMTP_HOST", value = var.smtp_host },
+    { name = "SMTP_PORT", value = tostring(var.smtp_port) },
+    { name = "SMTP_STARTTLS", value = "true" },
+    { name = "SMTP_TO", value = var.smtp_to },
+    { name = "SMTP_USER", value = var.smtp_user },
+  ] : []
+
+  container_environment = concat([
+    { name = "BRAPI_REQUESTS_DIA_MAXIMO", value = tostring(var.brapi_daily_limit) },
+    { name = "OPCOES_IA_ENV", value = "prod" },
+    { name = "OPCOES_IA_COMPONENT", value = "operations" },
+  ], local.smtp_environment)
 }
 
 data "aws_availability_zones" "available" {
@@ -191,21 +212,11 @@ resource "aws_ecs_task_definition" "operations" {
   }
 
   container_definitions = jsonencode([{
-    name      = "operations"
-    image     = local.image_uri
-    essential = true
-    command   = ["--help"]
-    environment = [
-      { name = "BRAPI_REQUESTS_DIA_MAXIMO", value = tostring(var.brapi_daily_limit) },
-      { name = "OPCOES_IA_ENV", value = "prod" },
-      { name = "OPCOES_IA_COMPONENT", value = "operations" },
-      { name = "SMTP_FROM", value = var.smtp_from },
-      { name = "SMTP_HOST", value = var.smtp_host },
-      { name = "SMTP_PORT", value = tostring(var.smtp_port) },
-      { name = "SMTP_STARTTLS", value = "true" },
-      { name = "SMTP_TO", value = var.smtp_to },
-      { name = "SMTP_USER", value = var.smtp_user },
-    ]
+    name        = "operations"
+    image       = local.image_uri
+    essential   = true
+    command     = ["--help"]
+    environment = local.container_environment
     secrets = [
       for key in sort(tolist(local.runtime_keys)) : {
         name      = key
@@ -221,6 +232,15 @@ resource "aws_ecs_task_definition" "operations" {
       }
     }
   }])
+
+  # Filling only one of the two would silently leave the channel off, which is
+  # the same class of failure this change removes. Refuse the apply instead.
+  lifecycle {
+    precondition {
+      condition     = (var.smtp_host != "") == (var.smtp_to != "")
+      error_message = "smtp_host and smtp_to must be set together or both left empty."
+    }
+  }
 
   depends_on = [aws_iam_role_policy.execution]
   tags       = var.tags

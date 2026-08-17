@@ -93,8 +93,8 @@ variavel nao existe. `opcional` deve produzir estado explicito quando ausente.
 |---|---|---|---|
 | API | `DATABASE_URL` pooled, `BRAPI_TOKEN` | limite Brapi, origem CloudFront, issuer/client/escopo Cognito | Anthropic, SMTP, OpLab, News |
 | Intraday | `DATABASE_URL` pooled, `BRAPI_TOKEN` | limite Brapi | Anthropic, SMTP, OpLab, News |
-| Daily | `DATABASE_URL` pooled, `BRAPI_TOKEN` | Anthropic quando houver insumo, News, OpLab legado, SMTP | configuracao de identidade web |
-| Alert | `DATABASE_URL` pooled | SMTP local; SNS e gerido pela AWS | Brapi, OpLab, News, Anthropic |
+| Daily | `DATABASE_URL` pooled, `BRAPI_TOKEN` | Anthropic quando houver insumo, News, OpLab legado, SMTP SES | configuracao de identidade web |
+| Alert | `DATABASE_URL` pooled | SMTP SES; SNS e gerido pela AWS | Brapi, OpLab, News, Anthropic |
 | Migration | `DATABASE_URL` direta | nenhuma | todos os tokens de provider e notificacao |
 | CI tests | `DATABASE_URL` descartavel | dummies somente no teste do provider | Neon e segredos de producao |
 | Terraform plan | role OIDC de plan, IDs e nomes Cognito nao secretos | nenhuma | segredos de runtime |
@@ -102,6 +102,7 @@ variavel nao existe. `opcional` deve produzir estado explicito quando ausente.
 
 Anthropic e SMTP nao bloqueiam o inicio do daily: insumo vazio nao chama o
 modelo, e relatorio persistido continua valido quando envio nao esta configurado.
+O canal SMTP e o SES da propria conta; ver "Notificacao por email (SES)".
 Opcoes bloqueadas por plano e noticias sem provider aparecem como resultado
 operacional, nunca como sucesso vazio.
 
@@ -159,16 +160,23 @@ segredos e permanecem parametros do task definition.
 
 Depois que os containers existirem, grave cada JSON por um canal administrativo
 local, por exemplo com `aws secretsmanager put-secret-value --secret-id <ARN>
---secret-string fileb:///caminho/protegido/runtime.json`. Nao passe o JSON na
+--secret-string file:///caminho/protegido/runtime.json`. Nao passe o JSON na
 linha de comando, em `tfvars`, output, workflow ou issue. A role de deploy nao
 possui `secretsmanager:PutSecretValue` nem `GetSecretValue`; somente as roles de
 execucao leem seu proprio container.
 
 A URL **direta** administrativa do Neon nunca entra nesses containers. Ela
 permanece no GitHub Environment `Principal`, no secret protegido
-`NEON_DIRECT_DATABASE_URL`; o job de migracao a mapeia para `DATABASE_URL`
-somente durante `python -m src.db.bootstrap`. API e operacoes usam sempre a URL
-pooled.
+`DATABASE_URL`, consumido somente pelo job de migracao durante
+`python -m src.db.bootstrap`. API e operacoes usam sempre a URL pooled.
+
+O nome da variavel e o mesmo nos dois contextos; o **valor** e que difere, e a
+diferenca e funcional, nao burocratica. `aplicar` protege a migracao com
+`pg_advisory_lock`, que e lock de SESSAO. Medido contra o Neon em 2026-08-17:
+pelo endpoint pooled, dois bootstraps concorrentes adquirem o **mesmo** lock ao
+mesmo tempo e ambos seguem; pelo direto, o segundo e barrado. Por isso
+`src/db/bootstrap.py` **recusa** um host com `-pooler` — e essa checagem e o
+unico sinal que resta separando as duas URLs agora que o nome e comum.
 
 ## Grafo e aplicacao
 
@@ -250,7 +258,8 @@ sem cache, e so entao invalida CloudFront.
 
 Secrets exigidos no GitHub Environment `Principal`:
 
-- `NEON_DIRECT_DATABASE_URL`: somente o job de migracao; endpoint direto TLS.
+- `DATABASE_URL`: somente o job de migracao; endpoint **direto** TLS, sem
+  `-pooler` no host. O bootstrap recusa o endpoint pooled.
 
 Nao ha chave AWS permanente. Credenciais de runtime sao
 gravadas diretamente nos dois containers Secrets Manager antes do primeiro
@@ -314,10 +323,101 @@ aws sns publish --region sa-east-1 --topic-arn "$TOPIC" \
 `PendingConfirmation` nao e canal validado. O Budget de USD 5 e os alarmes
 CloudWatch publicam no mesmo topico.
 
+## Notificacao por email (SES)
+
+O relatorio diario e o alerta independente saem por SMTP autenticado no Amazon
+SES em `sa-east-1`. O modulo `infra/modules/notifications` declara a identidade
+de envio (`aws_sesv2_email_identity`) e o principal de envio-apenas
+(`aws_iam_user` + politica com `ses:SendRawEmail` escopada ao ARN da identidade
+e condicao `ses:FromAddress`). Terraform **nao** declara `aws_iam_access_key`:
+o atributo `ses_smtp_password_v4` gravaria a senha no state em texto claro.
+
+Host, porta, usuario, remetente e destinatario nao sao segredos e vivem em
+`prod.auto.tfvars`. Somente `SMTP_PASSWORD` vai para o container operacional no
+Secrets Manager.
+
+`smtp_host` e `smtp_to` sao injetados **juntos ou nenhum dos dois**. Um
+`precondition` no task definition recusa o apply quando so um esta preenchido.
+Isso existe porque o inverso ja quebrou producao: `smtp_to` era derivado de
+`notification_email` (o destinatario do SNS), o container subia com
+destinatario e sem host, e `ConfigSMTP.from_env()` tratava a metade como erro,
+derrubando o fluxo `alert` com `FalhaCritica` em 2026-08-17.
+
+### A conta esta no sandbox do SES
+
+`sesv2 get-account` retorna `ProductionAccessEnabled: false`. No sandbox o SES
+entrega **somente para enderecos verificados**, com teto de 200 mensagens/24h e
+1 msg/s. Isso e suficiente e deliberado: remetente e destinatario sao o mesmo
+endereco do titular, e o volume e o relatorio diario mais o alerta em dia util.
+
+Consequencia pratica: **adicionar um destinatario novo exige verificar aquele
+endereco antes**, ou o envio e recusado. Para isso:
+
+```bash
+aws sesv2 create-email-identity --email-identity <novo@exemplo.com> \
+    --region sa-east-1   # a AWS envia link; o envio so funciona apos o clique
+```
+
+Sair do sandbox e um chamado de suporte e so faz sentido se um dia houver
+destinatario de terceiro.
+
+### Primeiro provisionamento
+
+1. `terraform apply` cria identidade e usuario. `smtp_from` ja precisa estar no
+   inventario, porque o endereco e insumo da identidade; `smtp_host`,
+   `smtp_user` e `smtp_to` continuam vazios e o canal segue desligado.
+2. Concluir a verificacao pelo link que a AWS envia ao endereco. Conferir com
+   `aws sesv2 get-email-identity --email-identity <endereco> --region sa-east-1`
+   ate `VerifiedForSendingStatus` virar `true`.
+3. Criar a credencial e grava-la, sem passar a chave por argumento:
+
+```bash
+aws iam create-access-key --user-name opcoes-ia-prod-smtp   # anote AccessKeyId
+printf %s "<SecretAccessKey>" | python -m scripts.ses_smtp_password sa-east-1
+```
+
+   Monte o JSON com as seis chaves em arquivo `0600`, com `SMTP_PASSWORD`
+   recebendo a senha derivada, grave com
+   `aws secretsmanager put-secret-value --secret-id <ARN operations>
+   --secret-string file://<arquivo>` e apague o arquivo.
+4. Preencher `smtp_host` (`email-smtp.sa-east-1.amazonaws.com`), `smtp_user`
+   (o `AccessKeyId`, que nao e segredo) e `smtp_to` em `prod.auto.tfvars` e
+   aplicar. **E este apply que liga o canal.**
+
+### Rotacao da credencial de envio
+
+`create-access-key` -> derivar a senha -> gravar o segredo e atualizar
+`smtp_user` no inventario -> aplicar -> validar uma entrega -> so entao
+`aws iam delete-access-key --user-name opcoes-ia-prod-smtp --access-key-id
+<antigo>`. A ordem importa: deletar antes de validar deixa o canal mudo com o
+sintoma parecendo problema de rede.
+
+### Diagnostico
+
+- `535 Authentication Credentials Invalid`: senha derivada na regiao errada (a
+  regiao entra na derivacao), `smtp_user` fora de sincronia com a chave gravada,
+  ou chave ja deletada. Rederive antes de suspeitar do SES.
+- `554 Message rejected: Email address is not verified`: sandbox recusando um
+  destinatario ou remetente nao verificado. Verifique a identidade primeiro.
+- `SMTP_HOST e SMTP_TO devem ser configurados juntos`: meia configuracao
+  chegou ao container. Nao deveria ser alcancavel pelo inventario; se
+  acontecer, confira o `environment` da task definition ativa.
+- Nenhum erro e nenhum email: confira se o canal esta ligado de fato com
+  `aws ecs describe-task-definition --task-definition opcoes-ia-prod-operations
+  --query 'taskDefinition.containerDefinitions[0].environment'`. Sem
+  `SMTP_HOST` na lista, o canal esta desligado e o runtime apenas registra
+  aviso.
+
+### Desligar o canal
+
+Esvazie `smtp_host` e `smtp_to` em `prod.auto.tfvars` e aplique. Os dois saem
+juntos do container, o relatorio continua disponivel na interface e no banco, e
+a ausencia de envio volta a ser aviso, nao falha.
+
 ## Rotacao de segredos
 
 Monte o JSON novo em arquivo temporario com permissao `0600`, grave-o com
-`put-secret-value --secret-string fileb://...` e apague o arquivo. Nao altere o
+`put-secret-value --secret-string file://...` e apague o arquivo. Nao altere o
 container Terraform nem use `tfvars`. Lambda busca a versao `AWSCURRENT` em cold
 start; force uma atualizacao de configuracao ou aguarde nova instancia. ECS
 resolve cada seletor JSON quando inicia uma nova task, sem nova task definition.
@@ -410,8 +510,10 @@ Validado primeiro em producao com schedules desabilitados:
 - Daily concluiu o container com exit 0/estado parcial, persistiu relatorio e fez
   chamada Anthropic real; OpLab e NewsAPI locais responderam 401 e foram
   desabilitados no secret de producao.
-- Alert detectou a condicao e falhou explicitamente porque SMTP nao esta
-  configurado; SNS e o canal operacional independente.
+- Alert detectou a condicao e falhou explicitamente porque SMTP nao estava
+  configurado; SNS e o canal operacional independente. Resolvido depois pela
+  change `configure-ses-email-delivery`, que tambem removeu a causa de a falha
+  ser critica em vez de aviso: o `SMTP_TO` derivado de `notification_email`.
 - Subscription SNS confirmada e mensagem de teste publicada com sucesso.
 - Imagem operacional Trixie manteve 4 achados CRITICAL e 8 HIGH sem correcao
   publicada pelo ECR. O gate bloqueia achado severo corrigivel e reporta os
@@ -420,8 +522,8 @@ Validado primeiro em producao com schedules desabilitados:
 Depois da quota Lambda subir para 1000, reserved concurrency 20 foi aplicada. O
 inventario local encontrou os tres timers `not-found`/`inactive`, o cron legado
 ja estava removido e `schedules_enabled=true` habilitou os tres schedules em
-2026-08-17. Restam SMTP caso se deseje entrega de negocio por email e observacao
-de uma rodada agendada completa.
+2026-08-17. Resta observar uma rodada agendada completa; a entrega de negocio
+por email passou a existir com o SES (ver "Notificacao por email").
 
 Uma migracao futura para `us-east-1` pode reduzir precos unitarios de Lambda e
 Fargate, mas deve mover ou reavaliar tambem a regiao do Neon e medir latencia/

@@ -241,8 +241,18 @@ variable "smtp_user" {
   default     = ""
 }
 
+# The sending identity is created and verified before the channel is switched
+# on, so this address is populated one apply earlier than smtp_host.
 variable "smtp_from" {
-  description = "Optional nonsecret SMTP sender."
+  description = "Nonsecret address verified for sending; also the SMTP sender."
+  type        = string
+}
+
+# Deliberately not derived from notification_email. That address is the SNS
+# recipient for budget and alarms; reusing it here published a recipient
+# without a host and turned "channel not configured" into a hard failure.
+variable "smtp_to" {
+  description = "Optional nonsecret recipient of report and alert email."
   type        = string
   default     = ""
 }

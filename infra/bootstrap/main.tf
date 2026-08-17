@@ -65,6 +65,12 @@ locals {
   budget_arns = [
     "arn:aws:budgets::${var.aws_account_id}:budget/${var.project_name}-prod-monthly",
   ]
+  ses_identity_arns = [
+    "arn:aws:ses:${var.aws_region}:${var.aws_account_id}:identity/${var.sender_address}",
+  ]
+  smtp_user_arns = [
+    "arn:aws:iam::${var.aws_account_id}:user/${var.project_name}-prod-smtp",
+  ]
   runtime_container_arns = [
     "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:${var.project_name}/prod/api-*",
     "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:${var.project_name}/prod/operations-*",
@@ -895,12 +901,71 @@ data "aws_iam_policy_document" "deploy" {
     ]
     resources = local.runtime_container_arns
   }
+
 }
 
 resource "aws_iam_role_policy" "deploy" {
   name   = "terraform-deploy"
   role   = aws_iam_role.github["deploy"].id
   policy = data.aws_iam_policy_document.deploy.json
+}
+
+# Attached rather than inlined because AWS caps the sum of a role's inline
+# policies at 10,240 bytes and terraform-deploy already sits against that
+# ceiling. A customer-managed policy is a separate budget, and it keeps the
+# email-channel permissions legible as their own unit.
+data "aws_iam_policy_document" "deploy_notifications" {
+  statement {
+    sid    = "ManageSendingIdentity"
+    effect = "Allow"
+    actions = [
+      "ses:CreateEmailIdentity",
+      "ses:DeleteEmailIdentity",
+      "ses:GetEmailIdentity",
+      "ses:ListTagsForResource",
+      "ses:TagResource",
+      "ses:UntagResource",
+    ]
+    resources = local.ses_identity_arns
+  }
+
+  # Deliberately without iam:CreateAccessKey. This role creates the send-only
+  # principal; it cannot mint a credential that sends email. The access key is
+  # created by a human through a local administrative channel, which is also
+  # why deleting keys is allowed here: the documented rollback destroys a user
+  # whose key Terraform never saw.
+  statement {
+    sid    = "ManageSmtpUser"
+    effect = "Allow"
+    actions = [
+      "iam:CreateUser",
+      "iam:DeleteAccessKey",
+      "iam:DeleteUser",
+      "iam:DeleteUserPolicy",
+      "iam:GetUser",
+      "iam:GetUserPolicy",
+      "iam:ListAccessKeys",
+      "iam:ListAttachedUserPolicies",
+      "iam:ListGroupsForUser",
+      "iam:ListUserPolicies",
+      "iam:ListUserTags",
+      "iam:PutUserPolicy",
+      "iam:TagUser",
+      "iam:UntagUser",
+    ]
+    resources = local.smtp_user_arns
+  }
+}
+
+resource "aws_iam_policy" "deploy_notifications" {
+  name        = "${var.project_name}-prod-deploy-notifications"
+  description = "Email channel resources managed by the production deploy role"
+  policy      = data.aws_iam_policy_document.deploy_notifications.json
+}
+
+resource "aws_iam_role_policy_attachment" "deploy_notifications" {
+  role       = aws_iam_role.github["deploy"].name
+  policy_arn = aws_iam_policy.deploy_notifications.arn
 }
 
 # The migration role intentionally has no AWS data-plane permissions. Its
