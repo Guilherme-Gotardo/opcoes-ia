@@ -1,0 +1,37 @@
+# Quando o relatório do agente é composto. Instalação: ver docs/AGENTE.md.
+#
+# UMA VEZ POR DIA, e o motivo está no .service: o timer do pregão dispara 14
+# vezes por dia útil, e encadear o agente ali seria 14 chamadas de LLM para
+# resumir o mesmo dia.
+#
+# 17h30, meia hora depois do fechamento (17h): dá tempo do último disparo do
+# pregão terminar e gravar sugestões, desfecho e enriquecimento. Compor antes
+# disso descreveria um dia incompleto.
+#
+# Segunda a sexta só. Feriado dispara, o insumo vem vazio, e
+# `src.agente.relatorio` sai sem gastar chamada — mais barato que duplicar o
+# calendário de pregão numa expressão de OnCalendar, que divergiria no
+# primeiro feriado móvel.
+
+[Unit]
+Description=opcoes-ia — agenda do relatório diário do agente
+
+[Timer]
+Unit=opcoes-ia-relatorio.service
+
+# Fuso no próprio OnCalendar (systemd >= 252). Não existe chave `Timezone=`
+# em [Timer]: escrevê-la é aceita em silêncio como "Unknown key" e o timer
+# passa a seguir o fuso da máquina.
+OnCalendar=Mon..Fri *-*-* 17:30 America/Sao_Paulo
+
+# Persistent=true AQUI, ao contrário do timer de pregão. São casos opostos:
+# uma avaliação intradiária perdida não deve rodar de madrugada sobre preço
+# velho, mas um relatório perdido AINDA VALE — ele descreve um dia que já
+# aconteceu, e ler amanhã o resumo de ontem é melhor que não ler.
+Persistent=true
+
+RandomizedDelaySec=120
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target

@@ -24,6 +24,12 @@ import logging
 import os
 import sys
 
+# Importar `config` carrega o `.env` (ele chama `load_dotenv` no import), que
+# é a convenção do projeto — sem isto, uma chave presente no arquivo
+# apareceria como "não está no ambiente" e a mensagem mandaria configurar o
+# que já estava configurado. Não usamos `get_settings()` de propósito: ele
+# exige DATABASE_URL e BRAPI_TOKEN, que não têm nada a ver com esta chamada.
+import src.config  # noqa: F401
 from src.agente.ferramentas import ConfiguracaoInvalida, do_arquivo
 
 logging.basicConfig(level=logging.INFO)
@@ -38,6 +44,41 @@ PERGUNTA = (
     "responda em uma frase, citando a fonte. Se não encontrar, diga que não "
     "encontrou — não estime."
 )
+
+
+#: Prefixo das chaves da Anthropic. Chave de outro provedor no lugar certo
+#: é um erro plausível — DeepSeek, OpenAI e vários outros usam `sk-` puro, e
+#: o nome da variável não impede ninguém de colar a chave errada nela.
+_PREFIXO_ANTHROPIC = "sk-ant-"
+
+
+def diagnosticar_chave(chave: str | None) -> str | None:
+    """Mensagem de problema com a chave, ou `None` se ela parece válida.
+
+    Existe porque o modo de falha sem isto é ruim: a chave de outro provedor
+    vai para `api.anthropic.com`, volta 401, e a mensagem da API fala de
+    autenticação — não de provedor trocado. Quem colou a chave acha que ela
+    expirou, não que está no lugar errado.
+
+    NÃO valida a chave de verdade: só distingue "não parece ser deste
+    provedor" de "parece, mas pode estar inválida". A segunda só a API sabe.
+    """
+    if not chave:
+        return None  # a ausência tem mensagem própria, mais útil que esta
+    if chave.startswith(_PREFIXO_ANTHROPIC):
+        return None
+    return (
+        f"A chave em ANTHROPIC_API_KEY não parece ser da Anthropic: chaves\n"
+        f"deste provedor começam com {_PREFIXO_ANTHROPIC!r}.\n\n"
+        "Chaves de DeepSeek, OpenAI e compatíveis começam só com 'sk-'. Elas\n"
+        "NÃO funcionam aqui, e não é questão de qualidade do modelo: esta\n"
+        "camada usa busca web nativa e conector MCP, que só existem na\n"
+        "Messages API da Anthropic. Mandada para api.anthropic.com, a chave\n"
+        "voltaria 401 falando de autenticação — o que esconderia a causa.\n\n"
+        "Se a intenção era testar noutro provedor, guarde a chave noutra\n"
+        "variável (ex.: DEEPSEEK_API_KEY) para ela não ser usada aqui por\n"
+        "engano."
+    )
 
 
 def _texto_e_citacoes(resposta) -> tuple[str, list[str]]:
@@ -73,6 +114,10 @@ def _buscas_feitas(resposta) -> tuple[int, list[str]]:
 
 
 def verificar(modelo: str = MODELO_PADRAO) -> int:
+    if (problema := diagnosticar_chave(os.getenv("ANTHROPIC_API_KEY"))):
+        print(problema)
+        return 2
+
     if not os.getenv("ANTHROPIC_API_KEY"):
         print(
             "ANTHROPIC_API_KEY não está no ambiente.\n\n"

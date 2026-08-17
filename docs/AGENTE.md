@@ -1,14 +1,94 @@
-# Ferramentas do agente (Fase 3)
+# O agente de relatório (Fases 3 e 4)
 
-O agente de relatório ainda não existe — é a Fase 4. Esta fase entrega a
-**fiação**: a configuração de ferramentas que a chamada à Messages API vai
-usar, montada de forma que não dê para errar, e um comando que prova que ela
-funciona.
+Compõe o relatório do dia a partir do que os módulos determinísticos
+apuraram, e o entrega em `reports/` e na tela.
 
 ```bash
-python -m src.agente.ferramentas   # mostra o que seria enviado (sem token)
-ANTHROPIC_API_KEY=sk-ant-... python -m src.agente.verificar   # chamada real
+python -m src.agente.ferramentas   # mostra as ferramentas (sem token)
+python -m src.agente.verificar     # chamada de teste: buscou? citou a fonte?
+python -m src.agente.relatorio --seco   # mostra o prompt e para
+python -m src.agente.relatorio     # compõe e entrega
 ```
+
+## As peças, e onde o LLM entra
+
+```
+dados.py    junta o que os módulos determinísticos decidiram   [sem LLM]
+prompt.py   monta a instrução e os guarda-corpos               [sem LLM]
+relatorio.py chama o modelo e persiste                         [COM LLM]
+entrega.py  escreve em reports/                                [sem LLM]
+```
+
+O texto é a única coisa que vem do modelo. Todo número que ele cita precisa
+estar no insumo, e o prompt cobra isso.
+
+**Falha do agente não invalida nada.** Sugestões, desfecho e enriquecimento
+já estão gravados quando ele roda; sem chave, sem rede ou com recusa do
+modelo, o que se perde é o texto.
+
+## O que o agente recebe — e o que não recebe
+
+Entra o **veredito** de cada critério: aprovado ou reprovado, com o valor
+comparado e o limiar que valia. Não entra o dado de mercado cru que
+permitiria refazer a conta.
+
+A diferença é o guarda-corpo central. Com IV rank, delta e preço soltos, o
+modelo *poderia* reavaliar — e um modelo que pode reavaliar eventualmente
+reavalia, discorda, e escreve "esta parece elegível apesar de reprovada".
+Recebendo só o veredito e os números que o sustentaram, discordar exigiria
+contradizer um dado explícito na frente dele.
+
+Os guarda-corpos do prompt são cobrados por teste, trecho a trecho
+(`GUARDA_CORPOS` em `prompt.py`): não reavalia critério, não sugere ordem,
+não estima preço-alvo, não usa busca web para número, sempre cita a fonte,
+nunca trata nulo como zero. Guarda-corpo que ninguém testa some no primeiro
+refactor — e some em silêncio, porque o relatório continua saindo.
+
+### A regra que a busca web criou
+
+O agente tem busca web. Se ele procurar "cotação de PETR4", vai achar — e
+passará a existir um **terceiro** número de preço, competindo com o do ETL e
+com o do modelo, sem procedência no banco. A regra 1 do projeto ("dado nunca
+é lembrado ou estimado pelo agente") só sobrevive com a busca restrita a
+contexto narrativo: fato relevante, guidance, notícia. Preço, grega e IV vêm
+do insumo, sempre.
+
+## Agendamento: por que timer próprio
+
+`opcoes-ia-pregao.timer` dispara **14 vezes** por dia útil. Encadear o agente
+ali seria 14 chamadas de LLM por dia para produzir um texto que resume o
+*dia*. `opcoes-ia-relatorio.timer` roda **uma vez**, às 17h30 — meia hora
+depois do fechamento, com o dia inteiro já gravado.
+
+Diferença deliberada entre os dois timers: o do relatório tem
+`Persistent=true`, o do pregão não. São casos opostos — uma avaliação
+intradiária perdida não deve rodar de madrugada sobre preço velho, mas um
+relatório perdido ainda vale, porque descreve um dia que já aconteceu.
+
+```bash
+cp deploy/systemd/opcoes-ia-relatorio.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now opcoes-ia-relatorio.timer
+```
+
+## Entrega
+
+Dois arquivos por dia, de propósito:
+
+| Arquivo | O que é | LLM? |
+|---|---|---|
+| `reports/AAAA-MM-DD.md` | o que o sistema apurou | não |
+| `reports/AAAA-MM-DD-agente.md` | uma leitura sobre aquilo | sim |
+
+Fundi-los faria a interpretação herdar a autoridade da apuração, e daqui a
+seis meses ninguém saberia qual parágrafo foi calculado e qual foi redigido.
+
+O mesmo texto vai para `relatorios_agente` (migração 009) e aparece no
+cartão **Leitura do dia**, na tela de Carteira — por último na página, depois
+dos números: abrir a tela com o texto do modelo daria a ele a primeira
+palavra sobre uma carteira que ele não apurou.
+
+## Três correções ao plano (Fase 3)
 
 ## Três correções ao plano
 
@@ -91,14 +171,28 @@ escalar. A escolha de rotina se mantém; o alvo de escalada foi superado por
 `verificar.py` testa no **mesmo modelo** que o agente vai usar — testar
 noutro provaria uma fiação que não é a que roda.
 
+## Chave de outro provedor
+
+`ANTHROPIC_API_KEY` com uma chave que não começa com `sk-ant-` falha **antes**
+de gastar a viagem, com mensagem que diz o que aconteceu. Sem isso, a chave
+iria para `api.anthropic.com`, voltaria 401 falando de autenticação, e quem
+colou a chave concluiria que ela expirou — não que está no lugar errado.
+
+Chaves de DeepSeek, OpenAI e compatíveis não funcionam aqui, e não é questão
+de qualidade do modelo: esta camada usa busca web nativa e conector MCP, que
+só existem na Messages API.
+
 ## O que ainda falta
 
 - **A chave não está configurada.** Sem `ANTHROPIC_API_KEY` nenhuma chamada
-  real acontece, e o critério de pronto da fase ("buscar uma notícia real e
+  real acontece, e o critério de pronto da Fase 3 ("buscar uma notícia real e
   citar a fonte") só fecha quando você rodar `python -m src.agente.verificar`.
-  Toda a montagem é testada sem chave; a viagem até a API, não.
-- **O agente em si é a Fase 4.** Aqui não há prompt, não há relatório e não
-  há entrega — só a configuração que a Fase 4 consome.
+  Toda a montagem é testada sem chave; a viagem até a API, não. Vale igual
+  para o relatório: nenhum texto foi composto por um modelo de verdade ainda.
+- **Escalada de modelo não está implementada.** O plano previa subir para um
+  modelo mais capaz quando o próprio agente sinalizasse contradição entre
+  fontes. Hoje `--modelo` troca à mão; detectar a contradição e escalar
+  sozinho é decisão em aberto.
 - **Cross-check de calendário não virou MCP.** O plano previa um; o projeto
   já tem Earnings Event Service com providers próprios (manual, CVM, Yahoo),
   e um MCP de calendário duplicaria isso com uma fonte a menos de

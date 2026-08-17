@@ -686,6 +686,25 @@
         }
       }
     },
+    "/relatorio": {
+      "get": {
+        "summary": "Relatorio",
+        "description": "O relatório mais recente composto pelo agente.\n\nO mais recente, não o de hoje: se o pipeline não rodou hoje, mostrar\nvazio esconderia o de ontem — que continua sendo a última leitura\ndisponível. `data` e `gerado_em` dizem de quando é, e a interface avisa\nquando está velho.",
+        "operationId": "relatorio_relatorio_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelatorioAgenteResposta"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/parametros": {
       "get": {
         "summary": "Parametros",
@@ -1816,6 +1835,33 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "InsumoResumoResposta": {
+        "properties": {
+          "sugestoes": {
+            "type": "integer",
+            "title": "Sugestoes",
+            "default": 0
+          },
+          "desfecho": {
+            "type": "integer",
+            "title": "Desfecho",
+            "default": 0
+          },
+          "enriquecimento": {
+            "type": "integer",
+            "title": "Enriquecimento",
+            "default": 0
+          },
+          "lacunas": {
+            "type": "integer",
+            "title": "Lacunas",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "InsumoResumoResposta",
+        "description": "Quanto o agente tinha na frente quando escreveu.\n\nCampos explícitos em vez de `dict` livre: um dicionário sem forma vira\n`{}` nos tipos gerados do TypeScript, e a interface perde a checagem\njustamente no dado que ela precisa exibir."
+      },
       "LancamentoResposta": {
         "properties": {
           "id": {
@@ -2480,6 +2526,85 @@
           "valor"
         ],
         "title": "PosicaoResposta"
+      },
+      "RelatorioAgenteResposta": {
+        "properties": {
+          "disponivel": {
+            "type": "boolean",
+            "title": "Disponivel",
+            "description": "False quando a migração 009 não foi aplicada neste banco"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data"
+          },
+          "gerado_em": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gerado Em"
+          },
+          "texto": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Texto",
+            "description": "Markdown"
+          },
+          "modelo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Modelo"
+          },
+          "fontes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fontes",
+            "description": "URLs que a busca web trouxe e o agente citou. Vazio quer dizer que o texto saiu só do insumo interno"
+          },
+          "buscas": {
+            "type": "integer",
+            "title": "Buscas",
+            "default": 0
+          },
+          "insumo_resumo": {
+            "$ref": "#/components/schemas/InsumoResumoResposta",
+            "description": "Contagens do que o agente tinha na frente"
+          }
+        },
+        "type": "object",
+        "required": [
+          "disponivel"
+        ],
+        "title": "RelatorioAgenteResposta",
+        "description": "O relatório do dia composto pelo agente de IA.\n\nAutoridade diferente de tudo o mais nesta API: os outros recursos trazem\no que o sistema APUROU; este traz uma leitura sobre aquilo, escrita por\num modelo de linguagem. `modelo` e `fontes` viajam junto porque texto de\nLLM sem procedência não é auditável — meses depois ninguém saberia qual\nmodelo escreveu nem o que ele consultou."
       },
       "ResultadosResposta": {
         "properties": {

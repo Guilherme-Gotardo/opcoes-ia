@@ -1,0 +1,38 @@
+# Relatório do agente, uma vez por dia. Instalação: ver docs/AGENTE.md.
+#
+# Unidade SEPARADA da do pregão, e isso é a decisão principal aqui.
+# `opcoes-ia-pregao.timer` dispara 14 vezes por dia útil; encadear o agente
+# ali dentro seria 14 chamadas de LLM por dia para produzir um texto que
+# resume o DIA. O relatório roda uma vez, depois do fechamento, quando já
+# existe um dia inteiro para resumir.
+
+[Unit]
+Description=opcoes-ia — relatório diário composto pelo agente de IA
+Wants=network-online.target
+After=network-online.target
+# Não é dependência forte: se o pregão não rodou, o agente descobre sozinho
+# que não há o que relatar (insumo vazio) e sai sem gastar chamada.
+After=opcoes-ia-pregao.service
+
+[Service]
+Type=oneshot
+
+WorkingDirectory=%h/Área de trabalho/projetos/opcoes-ia
+ExecStart="%h/Área de trabalho/projetos/opcoes-ia/.venv/bin/python" -m src.agente.relatorio
+
+# Mesmo arquivo de segredos do pregão — ANTHROPIC_API_KEY entra nele.
+EnvironmentFile=%h/.config/opcoes-ia/env
+
+StandardOutput=journal
+StandardError=journal
+
+# Uma chamada com busca web pode demorar: o turno pausa e retoma até três
+# vezes. 15 min é folga larga; passou disso, algo travou.
+TimeoutStartSec=900
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# O relatório é escrito em reports/, dentro do repositório.
+ReadWritePaths="%h/Área de trabalho/projetos/opcoes-ia"

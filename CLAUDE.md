@@ -105,6 +105,12 @@ python -m src.pregao.derivar 2026 2029 > src/pregao/feriados_b3.yaml
 python -m src.agente.ferramentas
 ANTHROPIC_API_KEY=sk-ant-... python -m src.agente.verificar
 
+# relatório do dia composto pelo agente (Fase 4). O `--seco` mostra o prompt
+# e para, sem chamar a API — é como se confere um guarda-corpo sem gastar.
+# Insumo vazio (nada avaliado) sai sem gastar chamada.
+python -m src.agente.relatorio --seco
+python -m src.agente.relatorio
+
 # taxa livre de risco (BCB/SGS 1178, Selic anualizada). Insumo do modelo de
 # precificação — vem de FONTE, não de parâmetro chumbado.
 python -m src.quant.taxa
@@ -148,11 +154,14 @@ docker compose up -d db
 - Pedido sobre **novo agente** → `.claude/agents/`, use `orchestrator.md` como
   referência de como os agentes se conectam
 - Pedido sobre **automação diária** → `.github/workflows/daily-etl.yml`
-- Pedido sobre **agente de IA, MCP, busca web** → `docs/AGENTE.md`, depois
-  `src/agente/ferramentas.py`. Três regras: `mcp_servers` sozinho é 400 (a
-  API exige também `tools[{type: mcp_toolset}]` e o beta), busca web é
-  ferramenta NATIVA e não precisa de MCP, e envio de notificação NÃO é
-  ferramenta do agente — é do script, depois de ele compor o texto
+- Pedido sobre **agente de IA, MCP, busca web, relatório** →
+  `docs/AGENTE.md`. A ordem de leitura é `dados.py` (o insumo) → `prompt.py`
+  (os guarda-corpos) → `relatorio.py` (a única peça com LLM) → `entrega.py`.
+  Quatro regras: `mcp_servers` sozinho é 400 (a API exige também
+  `tools[{type: mcp_toolset}]` e o beta); busca web é ferramenta NATIVA e não
+  precisa de MCP; envio de notificação NÃO é ferramenta do agente; e o agente
+  recebe o VEREDITO de cada critério, nunca o dado cru que permitiria
+  reavaliar
 - Pedido sobre **grega, preço teórico, probabilidade de exercício** →
   `docs/QUANT.md`, depois `src/quant/enrichment.py` (puro) e
   `src/quant/pipeline.py` (o que tem I/O). Regra que atravessa tudo: isto é
@@ -499,6 +508,35 @@ docker compose up -d db
       ferramenta de envio transfere a ele a decisão de mandar, para quem e
       quantas vezes; o envio fica determinístico no script, depois de o
       agente compor o texto
+- [x] **Agente de relatório** (Fase 4 do plano, 2026-08-16): `src/agente/`
+      (`dados` → `prompt` → `relatorio` → `entrega`) + migração 009 +
+      `GET /relatorio` + cartão "Leitura do dia" na tela de Carteira. Ver
+      `docs/AGENTE.md`.
+      O guarda-corpo central é o que o agente **não** recebe: entra o
+      VEREDITO de cada critério (aprovado/reprovado, com o valor comparado e
+      o limiar), nunca o dado de mercado cru. Com IV rank, delta e preço
+      soltos o modelo poderia reavaliar — e um modelo que pode reavaliar
+      eventualmente discorda e escreve "esta parece elegível apesar de
+      reprovada". As seis proibições do prompt são cobradas por teste,
+      TRECHO A TRECHO (`GUARDA_CORPOS`): ideia some em paráfrase, trecho não.
+      Regra nova que a busca web criou: o agente não usa busca para NÚMERO.
+      Se procurasse "cotação de PETR4" acharia, e passaria a existir um
+      terceiro preço competindo com o do ETL e o do modelo, sem procedência
+      no banco
+- [x] **Timer próprio para o relatório** (`opcoes-ia-relatorio.timer`, 17h30):
+      o timer de pregão dispara 14x por dia útil, e encadear o agente ali
+      seria 14 chamadas de LLM para resumir o mesmo dia. Diferença deliberada
+      entre os dois: o do relatório tem `Persistent=true` e o do pregão não —
+      avaliação intradiária perdida não deve rodar de madrugada sobre preço
+      velho, mas relatório perdido ainda vale, porque descreve um dia que já
+      aconteceu
+- [ ] **`OPLAB_TOKEN` é exigido por `config.py` mas o provedor foi
+      abandonado.** Só `etl/fetch_options.py` (a versão OpLab, nunca migrada
+      para a Brapi) o consome, e mesmo assim ele está na lista obrigatória de
+      `Settings.load()` — sem a variável, a API, o pipeline e o bootstrap
+      recusam a subir. Bateu de verdade em 2026-08-16, quando o `.env` ficou
+      sem ela. Tirar da lista obrigatória é uma linha; fica anotado porque é
+      mudança de comportamento, não limpeza
 - [ ] **Nenhuma chamada real à Messages API foi feita** — `ANTHROPIC_API_KEY`
       não está configurada e o CLI `ant` não está instalado. Toda a MONTAGEM
       é testada sem chave; a viagem até a API, não. O critério de pronto da

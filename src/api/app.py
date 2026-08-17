@@ -403,6 +403,49 @@ class EnriquecimentoResposta(BaseModel):
     itens: list[EnriquecimentoItemResposta] = Field(default_factory=list)
 
 
+class InsumoResumoResposta(BaseModel):
+    """Quanto o agente tinha na frente quando escreveu.
+
+    Campos explícitos em vez de `dict` livre: um dicionário sem forma vira
+    `{}` nos tipos gerados do TypeScript, e a interface perde a checagem
+    justamente no dado que ela precisa exibir.
+    """
+
+    sugestoes: int = 0
+    desfecho: int = 0
+    enriquecimento: int = 0
+    lacunas: int = 0
+
+
+class RelatorioAgenteResposta(BaseModel):
+    """O relatório do dia composto pelo agente de IA.
+
+    Autoridade diferente de tudo o mais nesta API: os outros recursos trazem
+    o que o sistema APUROU; este traz uma leitura sobre aquilo, escrita por
+    um modelo de linguagem. `modelo` e `fontes` viajam junto porque texto de
+    LLM sem procedência não é auditável — meses depois ninguém saberia qual
+    modelo escreveu nem o que ele consultou.
+    """
+
+    disponivel: bool = Field(
+        description="False quando a migração 009 não foi aplicada neste banco"
+    )
+    data: dt.date | None = None
+    gerado_em: dt.datetime | None = None
+    texto: str | None = Field(default=None, description="Markdown")
+    modelo: str | None = None
+    fontes: list[str] = Field(
+        default_factory=list,
+        description="URLs que a busca web trouxe e o agente citou. Vazio "
+                    "quer dizer que o texto saiu só do insumo interno",
+    )
+    buscas: int = 0
+    insumo_resumo: InsumoResumoResposta = Field(
+        default_factory=InsumoResumoResposta,
+        description="Contagens do que o agente tinha na frente",
+    )
+
+
 class VelaResposta(BaseModel):
     abertura_em: dt.datetime = Field(
         description="INÍCIO do período, não o momento da coleta"
@@ -1139,6 +1182,44 @@ def enriquecimento() -> EnriquecimentoResposta:
         taxa_livre_risco=_float(primeira[19]) if primeira else None,
         taxa_observada_em=primeira[20] if primeira else None,
         itens=itens,
+    )
+
+
+@app.get("/relatorio", response_model=RelatorioAgenteResposta)
+def relatorio() -> RelatorioAgenteResposta:
+    """O relatório mais recente composto pelo agente.
+
+    O mais recente, não o de hoje: se o pipeline não rodou hoje, mostrar
+    vazio esconderia o de ontem — que continua sendo a última leitura
+    disponível. `data` e `gerado_em` dizem de quando é, e a interface avisa
+    quando está velho.
+    """
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.relatorios_agente')")
+        if cur.fetchone()[0] is None:
+            return RelatorioAgenteResposta(disponivel=False)
+
+        cur.execute(
+            "SELECT data, gerado_em, texto, modelo, fontes, buscas, insumo_resumo "
+            "FROM relatorios_agente ORDER BY data DESC, gerado_em DESC LIMIT 1"
+        )
+        linha = cur.fetchone()
+
+    if not linha:
+        return RelatorioAgenteResposta(disponivel=True)
+
+    data, gerado_em, texto, modelo, fontes, buscas, resumo = linha
+    if isinstance(resumo, str):
+        resumo = json.loads(resumo or "{}")
+    return RelatorioAgenteResposta(
+        disponivel=True, data=data, gerado_em=gerado_em, texto=texto,
+        modelo=modelo, fontes=_como_lista(fontes), buscas=buscas,
+        # Chave desconhecida no JSON não pode derrubar a leitura: o resumo é
+        # gravado por uma versão do código e lido por outra.
+        insumo_resumo=InsumoResumoResposta(**{
+            k: v for k, v in (resumo or {}).items()
+            if k in InsumoResumoResposta.model_fields
+        }),
     )
 
 
