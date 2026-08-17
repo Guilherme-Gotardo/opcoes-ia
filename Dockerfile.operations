@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Manifest linux/amd64 de python:3.12-slim-trixie, fixado em 2026-08-17.
-ARG PYTHON_BASE=python:3.12-slim-trixie@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a
+ARG PYTHON_BASE=python:3.12-slim-trixie@sha256:876416ecde9aca2bcc90e1fb0c7a9500bbf749f5788b70f82d4c5a5c2357f8b4
 
 FROM --platform=linux/amd64 ${PYTHON_BASE} AS build
 
@@ -26,6 +26,10 @@ ENV HOME=/home/app \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TMPDIR=/tmp
+
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid 10001 app \
     && useradd --uid 10001 --gid app --create-home --home-dir /home/app app \
