@@ -117,7 +117,7 @@ jobs:
         run: docker build --platform linux/amd64 --file Dockerfile.operations --tag "$OPERATIONS_REPOSITORY:$RELEASE_TAG" .
       - name: Scan API image before publication
         if: steps.existing.outputs.reuse != 'true'
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: opcoes-ia-prod-api:${{ env.RELEASE_TAG }}
           severity: CRITICAL,HIGH
@@ -125,7 +125,7 @@ jobs:
           exit-code: "1"
       - name: Scan operations image before publication
         if: steps.existing.outputs.reuse != 'true'
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: opcoes-ia-prod-operations:${{ env.RELEASE_TAG }}
           severity: CRITICAL,HIGH

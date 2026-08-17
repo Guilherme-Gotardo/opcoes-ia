@@ -77,14 +77,14 @@ jobs:
       - name: Build operations image once locally
         run: docker build --platform linux/amd64 --file Dockerfile.operations --tag opcoes-ia-operations:ci .
       - name: Scan API image
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: opcoes-ia-api:ci
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
       - name: Scan operations image
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: opcoes-ia-operations:ci
           severity: CRITICAL,HIGH
