@@ -2,8 +2,11 @@ name: CI
 
 on:
   pull_request:
+  # O branch default deste repositorio e `master`, e a convencao e commitar
+  # direto nele. Enquanto isto dizia `main`, nenhum dos dois gatilhos ocorria
+  # na pratica: o push nao casava o branch e nao havia PR para o outro pegar.
   push:
-    branches: [main]
+    branches: [master]
 
 permissions:
   contents: read
