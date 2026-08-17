@@ -149,8 +149,13 @@ def _failures() -> list[str]:
         flags=re.DOTALL,
     )
     for block in schedule_blocks:
-        if not re.search(r'\bstate\s*=\s*"DISABLED"', block):
-            failures.append("EventBridge schedule not explicitly disabled")
+        literal_disabled = re.search(r'\bstate\s*=\s*"DISABLED"', block)
+        gated = re.search(
+            r'\bstate\s*=\s*var\.enabled\s*\?\s*"ENABLED"\s*:\s*"DISABLED"',
+            block,
+        )
+        if not literal_disabled and not gated:
+            failures.append("EventBridge schedule lacks an explicit disabled cutover gate")
 
     return failures
 

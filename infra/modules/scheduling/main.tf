@@ -83,7 +83,7 @@ resource "aws_scheduler_schedule" "flow" {
   description                  = "Disabled-by-default ${each.key} operations flow"
   schedule_expression          = each.value.expression
   schedule_expression_timezone = var.timezone
-  state                        = "DISABLED"
+  state                        = var.enabled ? "ENABLED" : "DISABLED"
 
   flexible_time_window {
     mode = "OFF"

@@ -63,8 +63,8 @@ output "operations_run_task_network" {
   value       = module.operations.public_network_configuration
 }
 
-output "disabled_schedule_arns" {
-  description = "Operational schedules remain disabled until the cutover gate."
+output "schedule_arns" {
+  description = "Operational schedules controlled by the explicit cutover gate."
   value       = module.scheduling.schedule_arns
 }
 

@@ -42,15 +42,14 @@ def test_exact_oidc_subjects_and_separate_roles() -> None:
     source = (INFRA / "bootstrap/main.tf").read_text(encoding="utf-8")
     for role in ("plan", "publish", "migration", "deploy"):
         assert re.search(rf"\b{role}\s+=", source)
-    assert 'plan      = "repo:${var.github_repository}:pull_request"' in source
-    assert (
-        'publish   = "repo:${var.github_repository}:environment:${var.github_environment}"'
-        in source
-    )
+    assert '@${var.github_owner_id}/' in source
+    assert '@${var.github_repository_id}:pull_request"' in source
+    assert '@${var.github_repository_id}:environment:${var.github_environment}"' in source
     assert 'variable = "token.actions.githubusercontent.com:aud"' in source
     assert 'variable = "token.actions.githubusercontent.com:sub"' in source
     frontend = (INFRA / "modules/frontend/main.tf").read_text(encoding="utf-8")
-    assert 'github_subject = "repo:${var.github_repository}:environment:${var.github_environment}"' in frontend
+    assert '@${var.github_owner_id}/' in frontend
+    assert '@${var.github_repository_id}:environment:${var.github_environment}"' in frontend
     assert 'name                 = "${var.name_prefix}-github-web-publish"' in frontend
 
 
@@ -91,7 +90,7 @@ def test_no_secret_shaped_inputs_outputs_or_tfvars_values() -> None:
     assert not re.search(r"(?i)(?:postgres(?:ql)?|https?)://[^\s/@:]+:[^\s/@]+@", tfvars)
 
 
-def test_backend_uses_native_lock_and_schedules_are_disabled() -> None:
+def test_backend_uses_native_lock_and_schedules_have_safe_cutover_gate() -> None:
     for backend in (
         INFRA / "bootstrap/backend.hcl",
         INFRA / "environments/prod/backend.hcl",
@@ -102,7 +101,8 @@ def test_backend_uses_native_lock_and_schedules_are_disabled() -> None:
 
     source = _terraform_source()
     assert 'resource "aws_scheduler_schedule" "flow"' in source
-    assert 'state                        = "DISABLED"' in source
+    assert 'state                        = var.enabled ? "ENABLED" : "DISABLED"' in source
+    assert re.search(r'variable "enabled".*?default\s*=\s*false', source, re.DOTALL)
 
 
 def test_lifecycle_policy_shape_is_valid_json_after_substitution() -> None:
@@ -269,7 +269,8 @@ def test_scheduler_uses_stable_window_minimal_role_and_distinct_retries() -> Non
     assert "resources = [var.task_role_arn, var.execution_role_arn]" in source
     assert 'variable = "iam:PassedToService"' in source
     assert '"<aws.scheduler.scheduled-time>"' in source
-    assert 'state                        = "DISABLED"' in source
+    assert 'state                        = var.enabled ? "ENABLED" : "DISABLED"' in source
+    assert 'schedules_enabled            = true' in prod_values
     assert re.search(r"maximum_event_age\s*=\s*60", source)
     assert re.search(r"maximum_retry_attempts\s*=\s*0", source)
     assert re.search(r"maximum_event_age\s*=\s*1800", source)

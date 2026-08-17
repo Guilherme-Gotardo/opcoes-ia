@@ -1,6 +1,6 @@
 locals {
   bucket_name    = "${var.name_prefix}-web-${var.aws_account_id}"
-  github_subject = "repo:${var.github_repository}:environment:${var.github_environment}"
+  github_subject = "repo:${split("/", var.github_repository)[0]}@${var.github_owner_id}/${split("/", var.github_repository)[1]}@${var.github_repository_id}:environment:${var.github_environment}"
 }
 
 data "aws_iam_openid_connect_provider" "github_actions" {

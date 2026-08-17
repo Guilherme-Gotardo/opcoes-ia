@@ -77,7 +77,7 @@
 - [x] 9.1 Provisionar Cognito User Pool com self-signup desabilitado, email como identidade, TOTP obrigatório e proteção adequada contra exclusão acidental.
 - [x] 9.2 Adaptar Hosted UI e app client público sem secret para authorization code com PKCE, callback `/auth/callback` e logout no hostname CloudFront.
 - [x] 9.3 Provisionar resource server/escopo da API, JWT authorizer e issuer/client/escopo usados pela validação em profundidade no runtime.
-- [ ] 9.4 Documentar criação e recuperação administrativa do único usuário fora do Terraform e validar login, MFA, anonimato, client/escopo incorretos e acesso direto à origem.
+- [x] 9.4 Documentar criação e recuperação administrativa do único usuário fora do Terraform e validar login, MFA, anonimato, client/escopo incorretos e acesso direto à origem.
 
 ## 10. EventBridge e semântica de execução
 
@@ -104,16 +104,16 @@
 - [x] 12.5 Bloquear atualização de Lambda/ECS quando migração, scan, testes de import ou smoke test falhar, preservando os digests anteriores.
 - [x] 12.6 Publicar OpenAPI como artefato versionado e documentar o gate coordenado para tipos, login PKCE e build do `opcoes-ia-web` contra os outputs AWS.
 - [x] 12.7 Remover o cron operacional de `.github/workflows/daily-etl.yml`, mantendo GitHub Actions exclusivamente em funções de CI/CD.
-- [ ] 12.8 Criar no `opcoes-ia-web` workflow OIDC que faz lint/build, publica assets no S3 com política de cache e invalida CloudFront somente depois do upload completo.
+- [x] 12.8 Criar no `opcoes-ia-web` workflow OIDC que faz lint/build, publica assets no S3 com política de cache e invalida CloudFront somente depois do upload completo.
 
 ## 13. Validação, cutover e operação
 
 - [x] 13.1 Aplicar todas as migrações no Postgres descartável e executar testes de concorrência, idempotência, persistência, falha parcial e rollback de aplicação.
 - [x] 13.2 Provisionar produção com schedules desabilitados, preencher segredos e criar o usuário Cognito fora do Terraform, validando que imagens/state/logs não expõem valores sensíveis.
-- [ ] 13.3 Executar smoke tests Cognito da API, incluindo login+TOTP, leitura, uma escrita controlada, rejeição sem token, CORS, liveness, Neon indisponível simulado e OpenAPI.
+- [x] 13.3 Executar smoke tests Cognito da API, incluindo login+TOTP, leitura, uma escrita controlada, rejeição sem token, CORS, liveness, Neon indisponível simulado e OpenAPI.
 - [x] 13.4 Executar manualmente `intraday`, `daily` e `alert`, validar logs/CloudWatch/SNS, destruir as tasks e confirmar que execução e relatórios permanecem no Neon.
-- [ ] 13.5 Coordenar login PKCE, callback, publicação S3/CloudFront e checagem tipada no `opcoes-ia-web` antes de liberar o acesso de produção.
-- [ ] 13.6 Desabilitar e registrar os timers systemd de produção, verificar ausência de cron legado e somente então habilitar os schedules EventBridge.
+- [x] 13.5 Coordenar login PKCE, callback, publicação S3/CloudFront e checagem tipada no `opcoes-ia-web` antes de liberar o acesso de produção.
+- [x] 13.6 Desabilitar e registrar os timers systemd de produção, verificar ausência de cron legado e somente então habilitar os schedules EventBridge.
 - [ ] 13.7 Observar uma sessão intradiária e uma rodada diária completas, validar orçamento Brapi, alarmes, ausência de duplicatas e alerta independente.
 - [x] 13.8 Documentar runbooks de deploy, recuperação do usuário/TOTP Cognito, rotação de segredo, execução manual/resume, diagnóstico por execution ID, rollback e reativação emergencial sem dois agendadores.
 - [x] 13.9 Atualizar `docs/PREGAO.md`, runbooks, `.env.example`, documentação da API e a seção de estado do `CLAUDE.md` com Cognito, S3/CloudFront e limitações realmente validadas.

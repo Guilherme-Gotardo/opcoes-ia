@@ -549,14 +549,15 @@ docker compose up -d db
       Lambda/API Gateway, Cognito, ECR, Fargate, EventBridge, CloudWatch,
       SNS/Budget, Secrets Manager, frontend S3 privado/CloudFront e state S3.
       Smokes reais de Lambda,
-      `intraday`, `daily` e `alert` foram executados em 2026-08-17; schedules
-      permanecem `DISABLED`. Ver `docs/RUNBOOK-CLOUD.md`
-- [ ] **Cutover serverless ainda bloqueado por ações externas**: quota Lambda
-      aplicada e 10 (pedido 1001 pendente, necessario para reserved concurrency
-      2), SMTP não está configurado e ainda falta observar uma rodada agendada
-      completa. Frontend CloudFront, subscription SNS e login Cognito/PKCE foram
-      validados. EventBridge não deve ser habilitado antes dos gates; timers
-      systemd permanecem apenas como fallback
+      `intraday`, `daily` e `alert` foram executados em 2026-08-17. Depois do
+      corte que confirmou ausência de timers locais, os três schedules foram
+      habilitados. Ver `docs/RUNBOOK-CLOUD.md`
+- [ ] **Cutover serverless aguarda observação agendada**: quota Lambda
+      efetiva subiu para 1000 e reserved concurrency 20 foi aplicada após o
+      smoke com 2 produzir 20 throttles/5xx. SMTP não está configurado e ainda
+      falta observar uma rodada agendada completa. Frontend CloudFront,
+      subscription SNS e login Cognito/PKCE foram validados; timers systemd
+      permanecem apenas como fallback
 - [ ] **Scan da imagem operacional tem risco residual sem correção**: a base
       Trixie atual reduziu para 4 CRITICAL e 8 HIGH, todos sem
       `fixed_in_version` no ECR em 2026-08-17. O release bloqueia severidade

@@ -36,7 +36,7 @@ Terraform, nao constantes de dominio:
 
 | Recurso | Limite inicial | Motivo |
 |---|---:|---|
-| Lambda API reserved concurrency | `2` | Limita cold starts/conexoes e atende uso pessoal |
+| Lambda API reserved concurrency | `20` | O painel dispara endpoints em paralelo; 2 causou 20 throttles/5xx no smoke real |
 | Lambda API memoria | `512 MiB` | Runtime FastAPI sem QuantLib |
 | Lambda API timeout | `30 s` | Limite compativel com requisicao HTTP, sem job operacional |
 | Fargate operations CPU | `512` (`0.5 vCPU`) | Um pipeline por task |
@@ -46,7 +46,7 @@ Terraform, nao constantes de dominio:
 | CloudWatch logs | `30 dias` | Retencao finita para controlar custo |
 | Brapi | `600 requests/dia` | Teto operacional configuravel atual |
 
-Mesmo no pico configurado, API (2), duas tasks e uma migracao administrativa
+Mesmo no pico configurado, API (20), duas tasks e uma migracao administrativa
 ficam muito abaixo das 901 conexoes diretas. A aplicacao usa o pooler; somente a
 migracao serializada recebe a URL direta.
 
@@ -232,7 +232,8 @@ descartavel; `terraform-plan.yml` publica apenas o plano de pull request; e
 5. Gate de metadata exige uma versao `AWSCURRENT` nos dois containers sem ler
    seus valores. No primeiro release, preencha-os fora do Terraform e reexecute;
    os mesmos tags/digests serao reutilizados.
-6. Plan/apply dos mesmos digests, sem rebuild; schedules continuam `DISABLED`.
+6. Plan/apply dos mesmos digests, sem rebuild; o estado dos schedules segue o
+   gate versionado `schedules_enabled`.
 7. Export de `openapi-<sha>.json` como artefato da release.
 
 Uma reexecucao encontra os dois tags imutaveis e reutiliza seus digests. Se
@@ -390,13 +391,16 @@ Rollback:
 
 ## Primeiro deploy de 2026-08-17
 
-Validado em producao com schedules desabilitados:
+Validado primeiro em producao com schedules desabilitados:
 
 - Migrações `001` a `010` aplicadas no Neon e conexao pooled testada.
 - Lambda respondeu liveness e ingeriu JSON correlacionado no CloudWatch.
 - Frontend publicado em S3 privado + CloudFront; endpoint S3 direto respondeu
   403, callback SPA respondeu 200, login Cognito/PKCE retornou ao painel e a API
   registrou request autenticado com status 200.
+- Escrita controlada adicionou VALE3 a watchlist e a removeu pelo painel. O
+  primeiro refresh revelou throttling com concorrencia 2; apos elevar para 20,
+  leitura paralela e rollback da escrita concluiram sem 503.
 - Intraday Fargate concluiu com exit 0 e persistiu a execucao
   `6c346eb5-b68e-4393-9e60-eb16fa0c91b3`.
 - Daily concluiu o container com exit 0/estado parcial, persistiu relatorio e fez
@@ -409,10 +413,11 @@ Validado em producao com schedules desabilitados:
   publicada pelo ECR. O gate bloqueia achado severo corrigivel e reporta os
   unfixed, alinhado ao `ignore-unfixed` do Trivy.
 
-Pendencias antes do cutover: aumento de quota Lambda para permitir reserved
-concurrency 2, teste de escrita autenticada controlada, SMTP caso se deseje
-entrega de negocio por email e observacao de uma rodada agendada completa.
-Enquanto isso os schedules permanecem `DISABLED`.
+Depois da quota Lambda subir para 1000, reserved concurrency 20 foi aplicada. O
+inventario local encontrou os tres timers `not-found`/`inactive`, o cron legado
+ja estava removido e `schedules_enabled=true` habilitou os tres schedules em
+2026-08-17. Restam SMTP caso se deseje entrega de negocio por email e observacao
+de uma rodada agendada completa.
 
 Uma migracao futura para `us-east-1` pode reduzir precos unitarios de Lambda e
 Fargate, mas deve mover ou reavaliar tambem a regiao do Neon e medir latencia/
@@ -427,7 +432,7 @@ Contas novas podem receber quota regional aplicada 10 enquanto o Service Quotas
 considera 1000 o default. Nesse intervalo, a AWS recusa qualquer reserva porque
 exige manter 10 execucoes nao reservadas. Somente para smoke com schedules
 desabilitados, o plano aceita `-var='lambda_reserved_concurrency=-1'`; a quota da
-conta ainda limita a funcao a 10. O cutover e a release normal continuam usando
-2 e nao devem prosseguir antes da aprovacao. Aumento de quota e reserved
+conta ainda limita a funcao a 10. O cutover e a release normal usam 20 depois
+da aprovacao. Aumento de quota e reserved
 concurrency nao geram custo por si; provisioned concurrency, que nao e usado
 aqui, geraria.

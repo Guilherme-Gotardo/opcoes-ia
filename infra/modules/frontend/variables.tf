@@ -13,6 +13,16 @@ variable "github_repository" {
   type        = string
 }
 
+variable "github_owner_id" {
+  description = "Immutable GitHub owner ID embedded in the OIDC subject."
+  type        = string
+}
+
+variable "github_repository_id" {
+  description = "Immutable frontend repository ID embedded in the OIDC subject."
+  type        = string
+}
+
 variable "github_environment" {
   description = "Protected GitHub environment used by the frontend deployment."
   type        = string

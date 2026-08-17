@@ -70,10 +70,10 @@ locals {
     "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:${var.project_name}/prod/operations-*",
   ]
   github_subjects = {
-    plan      = "repo:${var.github_repository}:pull_request"
-    publish   = "repo:${var.github_repository}:environment:${var.github_environment}"
-    migration = "repo:${var.github_repository}:environment:${var.github_environment}"
-    deploy    = "repo:${var.github_repository}:environment:${var.github_environment}"
+    plan      = "repo:${split("/", var.github_repository)[0]}@${var.github_owner_id}/${split("/", var.github_repository)[1]}@${var.github_repository_id}:pull_request"
+    publish   = "repo:${split("/", var.github_repository)[0]}@${var.github_owner_id}/${split("/", var.github_repository)[1]}@${var.github_repository_id}:environment:${var.github_environment}"
+    migration = "repo:${split("/", var.github_repository)[0]}@${var.github_owner_id}/${split("/", var.github_repository)[1]}@${var.github_repository_id}:environment:${var.github_environment}"
+    deploy    = "repo:${split("/", var.github_repository)[0]}@${var.github_owner_id}/${split("/", var.github_repository)[1]}@${var.github_repository_id}:environment:${var.github_environment}"
   }
 }
 

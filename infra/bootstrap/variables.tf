@@ -31,6 +31,18 @@ variable "github_repository" {
   }
 }
 
+variable "github_owner_id" {
+  description = "Immutable GitHub owner ID embedded in OIDC subjects."
+  type        = string
+  default     = "179357365"
+}
+
+variable "github_repository_id" {
+  description = "Immutable backend repository ID embedded in OIDC subjects."
+  type        = string
+  default     = "1334773137"
+}
+
 variable "github_environment" {
   description = "Protected GitHub environment used by production release jobs."
   type        = string

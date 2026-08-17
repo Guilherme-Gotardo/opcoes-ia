@@ -38,6 +38,12 @@ variable "timezone" {
   default     = "America/Sao_Paulo"
 }
 
+variable "enabled" {
+  description = "Whether production schedules are active after the cutover gate."
+  type        = bool
+  default     = false
+}
+
 variable "intraday_expression" {
   description = "Fourteen half-hour weekday triggers from 10:00 through 16:30."
   type        = string

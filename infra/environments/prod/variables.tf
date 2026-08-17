@@ -70,6 +70,16 @@ variable "frontend_github_repository" {
   }
 }
 
+variable "frontend_github_owner_id" {
+  description = "Immutable GitHub owner ID used by the frontend OIDC subject."
+  type        = string
+}
+
+variable "frontend_github_repository_id" {
+  description = "Immutable frontend repository ID used by the OIDC subject."
+  type        = string
+}
+
 variable "cognito_domain_prefix" {
   description = "Unique prefix for the AWS-managed Cognito login domain."
   type        = string
@@ -134,11 +144,11 @@ variable "operations_image_digest" {
 variable "lambda_reserved_concurrency" {
   description = "Reserved API concurrency constrained for the Neon pool; -1 is allowed only for disabled-schedule smoke before AWS raises a new-account quota."
   type        = number
-  default     = 2
+  default     = 20
 
   validation {
-    condition     = contains([-1, 2], var.lambda_reserved_concurrency)
-    error_message = "Production Lambda concurrency must be 2, or -1 temporarily while schedules remain disabled and the account quota blocks reservations."
+    condition     = contains([-1, 20], var.lambda_reserved_concurrency)
+    error_message = "Production Lambda concurrency must be 20, or -1 temporarily while schedules remain disabled and the account quota blocks reservations."
   }
 }
 
@@ -187,6 +197,12 @@ variable "scheduler_timezone" {
     condition     = var.scheduler_timezone == "America/Sao_Paulo"
     error_message = "Production schedules must use America/Sao_Paulo."
   }
+}
+
+variable "schedules_enabled" {
+  description = "Cutover gate; false until every legacy scheduler is disabled."
+  type        = bool
+  default     = false
 }
 
 variable "intraday_schedule_expression" {

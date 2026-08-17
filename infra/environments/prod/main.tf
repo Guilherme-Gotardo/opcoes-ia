@@ -31,11 +31,13 @@ module "runtime_containers" {
 module "frontend" {
   source = "../../modules/frontend"
 
-  name_prefix        = "${var.project_name}-${var.environment}"
-  aws_account_id     = var.aws_account_id
-  github_repository  = var.frontend_github_repository
-  github_environment = var.github_environment
-  tags               = local.common_tags
+  name_prefix          = "${var.project_name}-${var.environment}"
+  aws_account_id       = var.aws_account_id
+  github_repository    = var.frontend_github_repository
+  github_owner_id      = var.frontend_github_owner_id
+  github_repository_id = var.frontend_github_repository_id
+  github_environment   = var.github_environment
+  tags                 = local.common_tags
 }
 
 module "cognito" {
@@ -98,6 +100,7 @@ module "scheduling" {
   execution_role_arn    = module.operations.execution_role_arn
   network_configuration = module.operations.public_network_configuration
   timezone              = var.scheduler_timezone
+  enabled               = var.schedules_enabled
   intraday_expression   = var.intraday_schedule_expression
   daily_expression      = var.daily_schedule_expression
   alert_expression      = var.alert_schedule_expression
