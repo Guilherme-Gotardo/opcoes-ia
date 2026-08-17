@@ -26,6 +26,11 @@ RUN OPCOES_IA_ENV=prod \
 
 FROM --platform=linux/amd64 ${LAMBDA_BASE} AS runtime
 
+# The Runtime Interface Emulator is useful for local docker runs only. AWS
+# Lambda provides the runtime API in production, so do not ship its vulnerable
+# standalone Go binary in the deployed image.
+RUN rm -f /usr/local/bin/aws-lambda-rie
+
 COPY --from=build /asset ${LAMBDA_TASK_ROOT}
 WORKDIR ${LAMBDA_TASK_ROOT}
 
