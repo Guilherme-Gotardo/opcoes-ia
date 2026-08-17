@@ -343,3 +343,59 @@ CREATE TABLE IF NOT EXISTS execucao_pipeline (
 
 CREATE INDEX IF NOT EXISTS idx_execucao_pipeline_inicio
     ON execucao_pipeline (iniciado_em DESC);
+
+-- Contexto quantitativo por opção avaliada (migração 008).
+-- Criado originalmente pela migração 008_enriquecimento_quant.sql; replicado
+-- aqui para que um banco novo saia idêntico a um migrado (ver
+-- src/db/migrations/README.md). O raciocínio completo está na migração.
+--
+-- Resumo: é CONTEXTO, não GATE. `criterios_json` guarda o que aprovou ou
+-- reprovou; isto guarda números que ajudam a entender e não decidem nada. A
+-- chave é a EXECUÇÃO, não a sugestão, porque o contexto é útil justamente
+-- na reprovação — e `sugestoes` só recebe as elegíveis.
+CREATE TABLE IF NOT EXISTS enriquecimento_quant (
+    id                  BIGSERIAL PRIMARY KEY,
+    -- Agrupa com `desfecho_avaliacao`: mesmo carimbo, mesma execução.
+    executado_em        TIMESTAMPTZ NOT NULL,
+    codigo_opcao        VARCHAR(20) NOT NULL,
+    ticker_objeto       VARCHAR(12) NOT NULL REFERENCES ativos(ticker),
+
+    -- Gregas do MODELO. Unidades fixadas aqui para não circularem duas
+    -- convenções: theta por DIA corrido, vega e rho por PONTO PERCENTUAL.
+    delta_modelo        NUMERIC(10,6),
+    gamma               NUMERIC(12,8),
+    theta_dia           NUMERIC(12,6),
+    vega_pp             NUMERIC(12,6),
+    rho_pp              NUMERIC(12,6),
+    preco_teorico       NUMERIC(14,4),
+
+    -- Probabilidade risco-neutra de terminar dentro do dinheiro NO
+    -- VENCIMENTO. Não inclui exercício antecipado — a ressalva
+    -- correspondente viaja em `ressalvas` quando o contrato é americano.
+    prob_exercicio_vencimento NUMERIC(6,4),
+    iv_percentil_252d   NUMERIC(6,4),
+    skew_vs_cadeia      NUMERIC(8,4),
+
+    -- Auditoria: sem isto o número não é reconstruível depois.
+    modelo              VARCHAR(40) NOT NULL,
+    estilo_exercicio    VARCHAR(12),
+    taxa_livre_risco    NUMERIC(8,6),
+    taxa_observada_em   DATE,
+    volatilidade_usada  NUMERIC(8,6),
+    -- Por que cada campo nulo está nulo. Lista vazia = tudo calculado.
+    ressalvas           JSONB NOT NULL DEFAULT '[]'::jsonb,
+    calculado_em        TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    -- Uma linha por opção por execução. Reprocessar a mesma execução
+    -- atualiza em vez de duplicar (ON CONFLICT no repositório).
+    CONSTRAINT enriquecimento_quant_unico UNIQUE (executado_em, codigo_opcao)
+);
+
+-- "O contexto da execução que acabou de rodar" é a consulta da interface e
+-- do relatório.
+CREATE INDEX IF NOT EXISTS idx_enriquecimento_execucao
+    ON enriquecimento_quant (executado_em DESC);
+
+-- "Como esta opção evoluiu" — série histórica de uma opção específica.
+CREATE INDEX IF NOT EXISTS idx_enriquecimento_opcao
+    ON enriquecimento_quant (codigo_opcao, executado_em DESC);

@@ -7,3 +7,15 @@
 # datas de resultado. Arrasta pandas/numpy. Sem ela, o provider levanta
 # ProviderIndisponivel e os providers `manual` e `cvm` seguem funcionando.
 yfinance>=0.2
+
+# Enriquecimento quantitativo (src/quant/) — gregas, preço teórico e
+# probabilidade de exercício por árvore binomial CRR.
+#
+# OPCIONAL DE VERDADE, não "recomendada": sem ela `enriquecer()` levanta
+# `ModeloIndisponivel`, o pipeline captura, registra o motivo e a AVALIAÇÃO
+# roda igual. O enriquecimento é contexto, e contexto que derruba decisão
+# deixou de ser contexto.
+#
+# Instala no Python 3.14 pelo wheel `cp39-abi3` (ABI estável) — não existe
+# wheel `cp314` para o CPython padrão, só para o build free-threaded.
+QuantLib>=1.43

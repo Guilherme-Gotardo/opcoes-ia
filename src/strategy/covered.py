@@ -695,6 +695,17 @@ def executar_avaliacao_carteira() -> list[ResultadoAvaliacao]:
         gravar_desfecho(cur, executado_em, linhas_desfecho)
         conn.commit()
 
+    # --- contexto quantitativo: DEPOIS do commit, e fora dele ---
+    # Import adiado e transação própria pelo mesmo motivo: enriquecimento é
+    # opcional e não pode, em nenhuma hipótese, invalidar a decisão que já
+    # foi tomada e gravada acima. Importar no topo faria um `modelo.yaml`
+    # quebrado ou uma QuantLib ausente derrubarem a avaliação no import;
+    # gravar na mesma transação faria um erro de banco aqui levar embora as
+    # sugestões. Nenhum número daqui volta para `criterios_json`.
+    from src.quant.pipeline import enriquecer_execucao  # noqa: PLC0415
+
+    enriquecer_execucao(executado_em, resultados)
+
     n_sugeridas = sum(1 for r in resultados if r.elegivel)
     n_bloqueadas = sum(1 for r in resultados if r.bloqueado_por_resultado)
     log.info("Desfecho registrado: %s", dict(resumo_por_motivo(linhas_desfecho)))

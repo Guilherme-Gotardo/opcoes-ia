@@ -1,0 +1,46 @@
+# Parâmetros do modelo de precificação (enriquecimento quantitativo).
+#
+# ISTO NÃO É `params.yaml`. Aquele guarda CRITÉRIO — o que aprova ou reprova
+# uma operação. Este guarda MODELO — como um número de contexto é calculado.
+# Mexer aqui muda a precisão de uma estimativa; mexer lá muda a postura de
+# risco. Ficam separados para que nunca se confundam.
+
+# Passos da árvore binomial (Cox-Ross-Rubinstein). Mais passos = mais preciso
+# e mais lento; o erro cai com ~1/n. 1024 converge para a terceira casa
+# decimal do preço em opções típicas da B3 e custa ~2ms por opção.
+passos_arvore: 1024
+
+# ESTILO DE EXERCÍCIO — CONFIRA COM SUA CORRETORA ANTES DE CONFIAR
+# ----------------------------------------------------------------
+# Nas opções sobre AÇÕES da B3, a convenção é call americana (exercível a
+# qualquer momento até o vencimento) e put europeia (só no vencimento).
+#
+# É por contrato, não global: o plano de automação assumia "opções B3 são
+# americanas" para as duas pontas, e aplicar americana numa put europeia
+# superestima o prêmio teórico — o valor de exercício antecipado que o
+# modelo acrescenta simplesmente não existe naquele contrato. Como a venda
+# de put coberta é uma das duas estratégias do projeto, o viés cairia
+# exatamente onde mais importa.
+#
+# Está aqui, e não em código, porque é premissa que pode mudar por série e
+# por emissor. O estilo efetivamente usado é gravado em CADA linha de
+# `enriquecimento_quant`, então uma mudança futura não reescreve a história.
+estilo_exercicio:
+  CALL: americana
+  PUT: europeia
+
+# Dividend yield contínuo do ativo-objeto, em fração ao ano. Zero é o padrão
+# NEUTRO, não uma afirmação de que a empresa não paga dividendo: sem uma
+# fonte de proventos coletada, o projeto não estima. O efeito prático é
+# subestimar levemente o valor de exercício antecipado de calls americanas
+# — e o enriquecimento declara isso numa ressalva quando o valor é zero.
+dividend_yield_padrao: 0.0
+
+# Amostra mínima de IVs históricas para o percentil significar alguma coisa.
+# Abaixo disso o campo vira `None` com ressalva, em vez de um percentil
+# calculado sobre três pontos que pareceria tão sólido quanto um sobre 252.
+minimo_amostras_iv_percentil: 20
+
+# Mínimo de outras opções no mesmo vencimento para o skew ser comparação, e
+# não o desvio de uma opção contra ela mesma.
+minimo_opcoes_cadeia_skew: 3

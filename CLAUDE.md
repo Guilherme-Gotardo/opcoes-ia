@@ -99,6 +99,10 @@ python -m scripts.rodar_pregao --forcar     # ignora (fica marcado no detalhe)
 # e responder True o faria avaliar num feriado sobre cotação de outro dia.
 python -m src.pregao.derivar 2026 2029 > src/pregao/feriados_b3.yaml
 
+# taxa livre de risco (BCB/SGS 1178, Selic anualizada). Insumo do modelo de
+# precificação — vem de FONTE, não de parâmetro chumbado.
+python -m src.quant.taxa
+
 # preparar um banco (schema + migrações, idempotente)
 python -m src.db.bootstrap --dry-run   # mostra o alvo, sem escrever
 python -m src.db.bootstrap
@@ -138,6 +142,11 @@ docker compose up -d db
 - Pedido sobre **novo agente** → `.claude/agents/`, use `orchestrator.md` como
   referência de como os agentes se conectam
 - Pedido sobre **automação diária** → `.github/workflows/daily-etl.yml`
+- Pedido sobre **grega, preço teórico, probabilidade de exercício** →
+  `docs/QUANT.md`, depois `src/quant/enrichment.py` (puro) e
+  `src/quant/pipeline.py` (o que tem I/O). Regra que atravessa tudo: isto é
+  CONTEXTO, não gate — `strategy/covered.py` não importa `src.quant` no topo
+  e há teste que falha se alguém subir esse import
 - Pedido sobre **execução em pregão / agendamento** → `docs/PREGAO.md` é o
   ponto de entrada; depois `src/pregao/calendario.py` (há pregão agora?),
   `src/pregao/execucao.py` (o log) e `scripts/rodar_pregao.py` (o disparo).
@@ -437,3 +446,34 @@ docker compose up -d db
 - [ ] **Alerta de "não rodou hoje" não existe.** A tela mostra, ninguém é
       avisado. Um log que vive no banco não registra a queda do próprio banco,
       então o alerta precisa de caminho independente — Fase 5 do plano
+- [x] **Enriquecimento quantitativo** (Fase 2 do plano, 2026-08-16):
+      `src/quant/` + migração 008. Gregas, preço teórico, probabilidade de
+      exercício, percentil de IV e skew, por árvore binomial CRR (QuantLib,
+      dependência OPCIONAL). Ver `docs/QUANT.md`.
+      É CONTEXTO, não gate, e isso é verificado: `strategy/covered.py` não
+      importa `src.quant` no topo (o import é adiado, depois do commit da
+      decisão) e a gravação vai em TRANSAÇÃO PRÓPRIA — se fosse junto, um
+      erro de banco aqui abortaria a transação e levaria embora sugestões e
+      desfecho já calculados. Há teste que falha se alguém subir o import.
+      Achado do caminho: o plano assumia "opções B3 são americanas" para as
+      duas pontas. A convenção da B3 é call americana e **put europeia**, e
+      apreçar put europeia como americana superestima o prêmio em 2% a 9%
+      conforme o moneyness — justamente na estratégia de put coberta. O
+      estilo virou parâmetro POR CONTRATO em `src/quant/modelo.yaml`, e o
+      estilo usado é gravado por linha
+- [x] **Taxa livre de risco vem de fonte** (`src/quant/taxa.py`, BCB/SGS
+      série 1178 — pública, sem chave). O plano previa parâmetro
+      configurável; um número chumbado é exatamente o que a regra 1 proíbe, e
+      a própria Fase 5 já listava "taxa desatualizada" como risco de deriva.
+      BCB fora do ar reusa a última taxa gravada com a idade declarada em
+      ressalva. Não usa a série 432 (Meta Selic): ela carrega data de
+      VIGÊNCIA, que pode ser futura, e um `observada_em` no futuro tornaria a
+      auditoria da idade sem sentido
+- [ ] **O enriquecimento não aparece em tela nenhuma.** Está no banco e só é
+      consultável direto. Enquanto `opcoes` estiver vazia não haveria o que
+      mostrar, mas quando houver, isso é o que falta para o número servir a
+      uma decisão humana
+- [ ] **`prob_exercicio_vencimento` não inclui exercício antecipado** — mede
+      só o vencimento. Para quem vende call coberta num contrato americano, a
+      pergunta real é maior que essa. Sai como ressalva em toda linha
+      americana, mas segue sendo limite do número, não do texto
