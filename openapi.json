@@ -767,6 +767,61 @@
         ],
         "title": "AtivoResposta"
       },
+      "AutomacaoResposta": {
+        "properties": {
+          "disponivel": {
+            "type": "boolean",
+            "title": "Disponivel",
+            "description": "False quando a migração 007 não foi aplicada neste banco"
+          },
+          "rodou_hoje": {
+            "type": "boolean",
+            "title": "Rodou Hoje"
+          },
+          "ultima": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecucaoResposta"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recentes": {
+            "items": {
+              "$ref": "#/components/schemas/ExecucaoResposta"
+            },
+            "type": "array",
+            "title": "Recentes"
+          },
+          "interrompidas": {
+            "items": {
+              "$ref": "#/components/schemas/ExecucaoResposta"
+            },
+            "type": "array",
+            "title": "Interrompidas",
+            "description": "Abertas há mais de uma hora e nunca encerradas: processos mortos no meio (OOM, kill, máquina desligada)"
+          },
+          "calendario": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CalendarioPregaoResposta"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "disponivel",
+          "rodou_hoje"
+        ],
+        "title": "AutomacaoResposta",
+        "description": "Execução automática do pipeline — o que `rastreia_falhas` não cobre.\n\nDiferente das coletas acima, aqui a falha É registrada: cada disparo grava\numa linha antes de começar e a fecha com o desfecho. É o que permite\ndistinguir \"pulou porque não era pregão\" de \"quebrou\" de \"nunca rodou\"."
+      },
       "CaixaEntrada": {
         "properties": {
           "valor": {
@@ -819,6 +874,73 @@
         ],
         "title": "CaixaResposta",
         "description": "Saldo e extrato.\n\nO saldo é a SOMA dos lançamentos, nunca um número sobrescrito: é o\n\"como se chegou até aqui\" que explica, meses depois, por que uma\navaliação aceitou ou recusou uma put."
+      },
+      "CalendarioPregaoResposta": {
+        "properties": {
+          "vigencia_de": {
+            "type": "string",
+            "format": "date",
+            "title": "Vigencia De"
+          },
+          "vigencia_ate": {
+            "type": "string",
+            "format": "date",
+            "title": "Vigencia Ate"
+          },
+          "conferido_em": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conferido Em"
+          },
+          "anos_conferidos": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Anos Conferidos"
+          },
+          "anos_derivados": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Anos Derivados"
+          },
+          "fonte": {
+            "type": "string",
+            "title": "Fonte"
+          },
+          "erro": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Erro",
+            "description": "Preenchido quando o arquivo não pôde ser lido. Nesse estado NENHUM disparo roda: sem calendário não há como distinguir dia útil de feriado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "vigencia_de",
+          "vigencia_ate",
+          "conferido_em",
+          "anos_conferidos",
+          "anos_derivados",
+          "fonte"
+        ],
+        "title": "CalendarioPregaoResposta",
+        "description": "Estado do calendário que decide se há pregão.\n\n`anos_derivados` existe porque derivado não pode passar por conferido: as\ndatas funcionam, mas não foram batidas contra a fonte oficial — a mesma\ndistinção que `earnings` faz entre estimado e confirmado."
       },
       "CanalColetaResposta": {
         "properties": {
@@ -1271,6 +1393,67 @@
           "fontes"
         ],
         "title": "EventoResultadoResposta"
+      },
+      "ExecucaoResposta": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "iniciado_em": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Iniciado Em"
+          },
+          "encerrado_em": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Encerrado Em",
+            "description": "NULL com status='executando' é o rastro de um processo que morreu no meio — a linha abre ANTES do trabalho"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "executando | executado | pulado_fora_de_pregao | falhou"
+          },
+          "gatilho": {
+            "type": "string",
+            "title": "Gatilho"
+          },
+          "duracao_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duracao S"
+          },
+          "detalhe": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Detalhe",
+            "description": "Resumo por etapa: janela, orçamento, avaliação; erro e traceback quando o status é 'falhou'"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "iniciado_em",
+          "status",
+          "gatilho"
+        ],
+        "title": "ExecucaoResposta",
+        "description": "Um disparo do pipeline de pregão (`execucao_pipeline`, migração 007)."
       },
       "FonteResultadoResposta": {
         "properties": {
@@ -2066,10 +2249,13 @@
             ],
             "title": "Ultima Avaliacao Em"
           },
+          "automacao": {
+            "$ref": "#/components/schemas/AutomacaoResposta"
+          },
           "rastreia_falhas": {
             "type": "boolean",
             "title": "Rastreia Falhas",
-            "description": "Sempre False: nada registra execução com erro. Fonte sem entrega recente pode estar quebrada OU apenas sem novidade — o banco não distingue os dois casos",
+            "description": "Sempre False, e é sobre as COLETAS: nada registra falha por fonte. Fonte sem entrega recente pode estar quebrada OU apenas sem novidade, e o banco não distingue os dois. A execução do pipeline, essa sim, é rastreada em `automacao` — não confunda os dois escopos",
             "default": false
           }
         },
@@ -2077,10 +2263,11 @@
         "required": [
           "coletas",
           "orcamento",
-          "ultima_avaliacao_em"
+          "ultima_avaliacao_em",
+          "automacao"
         ],
         "title": "SaudeColetaResposta",
-        "description": "Saúde da coleta, derivada do dado que já existe.\n\nEste recurso NÃO é um log de execução: o projeto não grava tentativas,\nerros nem duração. Ele responde \"quando cada fonte entregou dado pela\núltima vez\", que é o que o banco realmente sabe. `rastreia_falhas`\ndeclara esse limite no próprio contrato para que a interface não\napresente silêncio como se fosse saúde."
+        "description": "Saúde da coleta, derivada do dado que já existe.\n\nPara as COLETAS este recurso não é um log: o projeto não grava tentativa\nnem erro por fonte, então ele responde \"quando cada fonte entregou dado\npela última vez\", que é o que o banco sabe. Para a EXECUÇÃO do pipeline\nde pregão, `automacao` é um log de verdade — ver `AutomacaoResposta`."
       },
       "SugestaoResposta": {
         "properties": {

@@ -51,6 +51,8 @@ from src.db.connection import get_connection
 from src.earnings.models import faixa_de_confianca
 from src.etl.budget import requests_gastos_hoje
 from src.fiscal.calculo import avaliar_operacao, carregar_tributos
+from src.pregao import execucao as execucao_pregao
+from src.pregao.calendario import CalendarioInvalido, carregar as carregar_calendario
 from src.market.valuation import (
     carregar_params,
     cotacao_vigente,
@@ -254,24 +256,92 @@ class OrcamentoResposta(BaseModel):
     )
 
 
+class ExecucaoResposta(BaseModel):
+    """Um disparo do pipeline de pregão (`execucao_pipeline`, migração 007)."""
+
+    id: int
+    iniciado_em: dt.datetime
+    encerrado_em: dt.datetime | None = Field(
+        default=None,
+        description="NULL com status='executando' é o rastro de um processo "
+                    "que morreu no meio — a linha abre ANTES do trabalho",
+    )
+    status: str = Field(
+        description="executando | executado | pulado_fora_de_pregao | falhou"
+    )
+    gatilho: str
+    duracao_s: float | None = None
+    detalhe: dict = Field(
+        default_factory=dict,
+        description="Resumo por etapa: janela, orçamento, avaliação; erro e "
+                    "traceback quando o status é 'falhou'",
+    )
+
+
+class CalendarioPregaoResposta(BaseModel):
+    """Estado do calendário que decide se há pregão.
+
+    `anos_derivados` existe porque derivado não pode passar por conferido: as
+    datas funcionam, mas não foram batidas contra a fonte oficial — a mesma
+    distinção que `earnings` faz entre estimado e confirmado.
+    """
+
+    vigencia_de: dt.date
+    vigencia_ate: dt.date
+    conferido_em: dt.date | None
+    anos_conferidos: list[int]
+    anos_derivados: list[int]
+    fonte: str
+    erro: str | None = Field(
+        default=None,
+        description="Preenchido quando o arquivo não pôde ser lido. Nesse "
+                    "estado NENHUM disparo roda: sem calendário não há como "
+                    "distinguir dia útil de feriado",
+    )
+
+
+class AutomacaoResposta(BaseModel):
+    """Execução automática do pipeline — o que `rastreia_falhas` não cobre.
+
+    Diferente das coletas acima, aqui a falha É registrada: cada disparo grava
+    uma linha antes de começar e a fecha com o desfecho. É o que permite
+    distinguir "pulou porque não era pregão" de "quebrou" de "nunca rodou".
+    """
+
+    disponivel: bool = Field(
+        description="False quando a migração 007 não foi aplicada neste banco"
+    )
+    rodou_hoje: bool
+    ultima: ExecucaoResposta | None = None
+    recentes: list[ExecucaoResposta] = Field(default_factory=list)
+    interrompidas: list[ExecucaoResposta] = Field(
+        default_factory=list,
+        description="Abertas há mais de uma hora e nunca encerradas: "
+                    "processos mortos no meio (OOM, kill, máquina desligada)",
+    )
+    calendario: CalendarioPregaoResposta | None = None
+
+
 class SaudeColetaResposta(BaseModel):
     """Saúde da coleta, derivada do dado que já existe.
 
-    Este recurso NÃO é um log de execução: o projeto não grava tentativas,
-    erros nem duração. Ele responde "quando cada fonte entregou dado pela
-    última vez", que é o que o banco realmente sabe. `rastreia_falhas`
-    declara esse limite no próprio contrato para que a interface não
-    apresente silêncio como se fosse saúde.
+    Para as COLETAS este recurso não é um log: o projeto não grava tentativa
+    nem erro por fonte, então ele responde "quando cada fonte entregou dado
+    pela última vez", que é o que o banco sabe. Para a EXECUÇÃO do pipeline
+    de pregão, `automacao` é um log de verdade — ver `AutomacaoResposta`.
     """
 
     coletas: list[CanalColetaResposta]
     orcamento: OrcamentoResposta
     ultima_avaliacao_em: dt.datetime | None
+    automacao: AutomacaoResposta
     rastreia_falhas: bool = Field(
         default=False,
-        description="Sempre False: nada registra execução com erro. Fonte "
-                    "sem entrega recente pode estar quebrada OU apenas sem "
-                    "novidade — o banco não distingue os dois casos",
+        description="Sempre False, e é sobre as COLETAS: nada registra falha "
+                    "por fonte. Fonte sem entrega recente pode estar quebrada "
+                    "OU apenas sem novidade, e o banco não distingue os dois. "
+                    "A execução do pipeline, essa sim, é rastreada em "
+                    "`automacao` — não confunda os dois escopos",
     )
 
 
@@ -669,6 +739,8 @@ def saude_coleta() -> SaudeColetaResposta:
         limite = get_settings().brapi_requests_dia_maximo
         gastos = requests_gastos_hoje(cur)
 
+        automacao = _automacao(cur, hoje)
+
     return SaudeColetaResposta(
         coletas=coletas,
         orcamento=OrcamentoResposta(
@@ -678,6 +750,62 @@ def saude_coleta() -> SaudeColetaResposta:
             restante_hoje=max(0, limite - gastos),
         ),
         ultima_avaliacao_em=ultima_avaliacao,
+        automacao=automacao,
+    )
+
+
+def _calendario_resposta() -> CalendarioPregaoResposta | None:
+    """Estado do calendário de pregão, ou o erro que impede lê-lo.
+
+    Nunca deixa a exceção subir: este endpoint é justamente o que se abre
+    para descobrir o que está quebrado, e um 500 aqui apagaria a resposta
+    junto com a pergunta.
+    """
+    try:
+        cal = carregar_calendario()
+    except CalendarioInvalido as e:
+        return CalendarioPregaoResposta(
+            vigencia_de=dt.date.min, vigencia_ate=dt.date.min,
+            conferido_em=None, anos_conferidos=[], anos_derivados=[],
+            fonte="", erro=str(e),
+        )
+    anos = range(cal.vigencia_de.year, cal.vigencia_ate.year + 1)
+    return CalendarioPregaoResposta(
+        vigencia_de=cal.vigencia_de,
+        vigencia_ate=cal.vigencia_ate,
+        conferido_em=cal.conferido_em,
+        anos_conferidos=sorted(cal.anos_conferidos),
+        anos_derivados=sorted(a for a in anos if a not in cal.anos_conferidos),
+        fonte=cal.fonte,
+    )
+
+
+def _automacao(cur, hoje: dt.date) -> AutomacaoResposta:
+    """Estado da execução automática, tolerante a banco sem a migração 007.
+
+    A tolerância não é defensividade gratuita: o banco gerenciado já esteve
+    atrás das migrações, e é exatamente nesse estado que alguém abre esta
+    tela para entender por que a automação não aparece. Devolver
+    `disponivel=False` responde; um 500 não.
+    """
+    cur.execute("SELECT to_regclass('public.execucao_pipeline')")
+    if cur.fetchone()[0] is None:
+        return AutomacaoResposta(disponivel=False, rodou_hoje=False)
+
+    recentes = [ExecucaoResposta(**e) for e in execucao_pregao.ultimas(20, cur=cur)]
+    return AutomacaoResposta(
+        disponivel=True,
+        rodou_hoje=execucao_pregao.rodou_em(hoje, cur=cur),
+        ultima=(
+            ExecucaoResposta(**u)
+            if (u := execucao_pregao.ultima_conclusao(cur=cur))
+            else None
+        ),
+        recentes=recentes,
+        interrompidas=[
+            ExecucaoResposta(**e) for e in execucao_pregao.orfas(minutos=60, cur=cur)
+        ],
+        calendario=_calendario_resposta(),
     )
 
 

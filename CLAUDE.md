@@ -86,6 +86,19 @@ python -m src.api --schema openapi.json   # exporta o contrato p/ gerar os
                                           # tipos TS (npm run gerar-tipos
                                           # no opcoes-ia-web)
 
+# execução automática em pregão — um disparo do pipeline (cotação +
+# avaliação, nesta ordem). A cotação vai junto de propósito: sem ela, uma
+# avaliação intradiária leria o fechamento anterior, que tem menos de 72h e
+# PASSA na janela de frescor — sugestão sobre o preço de ontem, em silêncio.
+# Fora da janela de pregão, registra o motivo e sai. Ver docs/PREGAO.md.
+python -m scripts.rodar_pregao              # respeita a janela
+python -m scripts.rodar_pregao --forcar     # ignora (fica marcado no detalhe)
+
+# calendário de pregão. Data FORA da vigência levanta CalendarioVencido —
+# nunca "não é feriado": responder False emudeceria o pipeline em dia útil,
+# e responder True o faria avaliar num feriado sobre cotação de outro dia.
+python -m src.pregao.derivar 2026 2029 > src/pregao/feriados_b3.yaml
+
 # preparar um banco (schema + migrações, idempotente)
 python -m src.db.bootstrap --dry-run   # mostra o alvo, sem escrever
 python -m src.db.bootstrap
@@ -125,6 +138,11 @@ docker compose up -d db
 - Pedido sobre **novo agente** → `.claude/agents/`, use `orchestrator.md` como
   referência de como os agentes se conectam
 - Pedido sobre **automação diária** → `.github/workflows/daily-etl.yml`
+- Pedido sobre **execução em pregão / agendamento** → `docs/PREGAO.md` é o
+  ponto de entrada; depois `src/pregao/calendario.py` (há pregão agora?),
+  `src/pregao/execucao.py` (o log) e `scripts/rodar_pregao.py` (o disparo).
+  Duas regras atravessam tudo: o calendário **falha alto** quando não sabe, e
+  a linha de execução **abre antes** do trabalho para um crash deixar rastro
 
 ## Estado atual (atualize esta seção conforme o projeto evolui)
 
@@ -380,3 +398,42 @@ docker compose up -d db
 - [ ] Agente `strategy-covered` validado contra o fluxo real de ponta a
       ponta (posições, cotações Brapi, relatório); ainda falta validar com
       dados reais de opções (depende de `fetch_options.py`/Brapi Pro acima)
+- [x] **Execução automática em pregão** (Fase 1 do plano de automação,
+      2026-08-16): `src/pregao/` + `scripts/rodar_pregao.py` + migração 007 +
+      unidades systemd em `deploy/systemd/`. Ver `docs/PREGAO.md`.
+      Três decisões que valem mais que o código: (a) o **ETL de cotação entra
+      no disparo**, porque o plano previa chamar só a avaliação e isso leria
+      o fechamento anterior — que tem menos de 72h e portanto PASSA na janela
+      de frescor, virando sugestão sobre o preço de ontem sem nada na tela
+      dizer isso; (b) o calendário **levanta `CalendarioVencido`** para data
+      fora da vigência, nunca "não é feriado", porque as duas alternativas
+      falham em silêncio nas duas direções; (c) a linha de `execucao_pipeline`
+      **abre antes do trabalho e commita na hora**, então um processo morto no
+      meio deixa `status='executando'` órfão — que é o rastro de "crashou", e
+      um INSERT só no fim não registraria esse caso.
+      Bug encontrado ao rodar: `status VARCHAR(20)` não comportava
+      `'pulado_fora_de_pregao'` (21 caracteres) — o CHECK listava um valor que
+      o tipo recusava, e o caminho MAIS percorrido (a maior parte das horas do
+      ano não é pregão) estourava. Corrigido com `ALTER` na própria migração,
+      que ainda não tinha ido a lugar nenhum
+- [x] **`/saude-coleta` ganhou `automacao`** e a tela de Mercado ganhou o
+      cartão "Execução automática". `rastreia_falhas` continua `false` e isso
+      NÃO é esquecimento: ele fala das COLETAS, onde falha por fonte segue sem
+      registro. A EXECUÇÃO, essa sim, passou a ser rastreada. Trocar os dois
+      escopos faria a tela vender silêncio de coleta como saúde
+- [ ] **A cadência de pregão encolhe o teto da watchlist**, e o número de
+      ~150 tickers citado acima vale só para o regime de uma coleta diária.
+      Com disparo de 30 em 30 minutos são ~18 requests/ticker/dia e o teto cai
+      para **~33**. Cadência e tamanho da watchlist são o mesmo botão — tabela
+      em `docs/PREGAO.md`. Nada no código impede estourar: o sintoma é o
+      `fetch_quotes` cortando a lista pelo fim, e os últimos tickers em ordem
+      alfabética param de ter preço
+- [ ] **Migrações 006 e 007 ainda não aplicadas no Neon** (conferido em
+      2026-08-16: `ativos` não tem `vigiado`, e não existem
+      `caixa_lancamentos` nem `execucao_pipeline`). As telas de Watchlist,
+      Caixa e Execução automática dependem delas — a de Execução degrada com
+      `disponivel: false`, as outras duas quebram. Destrava com
+      `python -m src.db.bootstrap` apontando para o Neon
+- [ ] **Alerta de "não rodou hoje" não existe.** A tela mostra, ninguém é
+      avisado. Um log que vive no banco não registra a queda do próprio banco,
+      então o alerta precisa de caminho independente — Fase 5 do plano

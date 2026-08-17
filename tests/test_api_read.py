@@ -399,8 +399,16 @@ def test_resultados_declaram_a_politica_vigente():
 
 # --- /operacao --------------------------------------------------------------
 
+#: Linha de `execucao_pipeline` na ordem do SELECT do repositório:
+#: (id, iniciado_em, encerrado_em, status, gatilho, detalhe).
+def _execucao(id_=1, status="executado", encerrado=AGORA, gatilho="systemd",
+              detalhe=None):
+    return (id_, AGORA, encerrado, status, gatilho, detalhe or {})
+
+
 def _dispatch_saude(cotacoes=(), opcoes=(), noticias=(), earnings=(),
-                       avaliacao=None, gastos=0):
+                       avaliacao=None, gastos=0, execucoes=(), orfas=(),
+                       tem_tabela_execucao=True, rodou_hoje=False):
     def dispatch(query, params):
         # A query do orçamento também cita `cotacoes`; reconhecer antes.
         if "COUNT(*) FROM cotacoes WHERE fonte" in query:
@@ -409,6 +417,20 @@ def _dispatch_saude(cotacoes=(), opcoes=(), noticias=(), earnings=(),
             return (avaliacao,)
         if "FROM earnings_event_sources" in query:
             return list(earnings)
+
+        # --- automação: as três primeiras citam `execucao_pipeline`, então a
+        # ordem aqui importa; a genérica fica por último.
+        if "to_regclass" in query:
+            return ("execucao_pipeline",) if tem_tabela_execucao else (None,)
+        if "SELECT EXISTS" in query:
+            return (rodou_hoje,)
+        if "encerrado_em IS NULL" in query:
+            return list(orfas)
+        if "encerrado_em IS NOT NULL" in query:
+            return list(execucoes)[:1]
+        if "FROM execucao_pipeline" in query:
+            return list(execucoes)
+
         if "FROM cotacoes" in query:
             return list(cotacoes)
         if "FROM opcoes" in query:
@@ -467,11 +489,90 @@ def test_saude_coleta_orcamento_estourado_nunca_fica_negativo():
 
 def test_saude_coleta_declara_que_nao_rastreia_falhas():
     """O limite honesto no próprio contrato: sem entrega recente pode ser
-    fonte quebrada OU dia sem novidade, e o banco não distingue."""
+    fonte quebrada OU dia sem novidade, e o banco não distingue.
+
+    Vale para as COLETAS. A execução do pipeline é rastreada — ver os testes
+    de `automacao` abaixo. São dois escopos, e trocá-los faria a tela vender
+    silêncio de coleta como saúde.
+    """
     cliente, cursor, conn, patches = _cliente(_dispatch_saude())
     with patches[0], patches[1], _orcamento_de(600):
         corpo = cliente.get("/saude-coleta").json()
     assert corpo["rastreia_falhas"] is False
+    _sem_escrita(cursor, conn)
+
+
+# --- /saude-coleta: automação -----------------------------------------------
+
+def test_automacao_expoe_execucoes_e_o_motivo_do_pulo():
+    pulo = _execucao(
+        id_=7, status="pulado_fora_de_pregao",
+        detalhe={"janela": {"motivo": "feriado: Natal", "em_pregao": False}},
+    )
+    cliente, cursor, conn, patches = _cliente(_dispatch_saude(
+        execucoes=[pulo], rodou_hoje=True,
+    ))
+    with patches[0], patches[1], _orcamento_de(600):
+        automacao = cliente.get("/saude-coleta").json()["automacao"]
+
+    assert automacao["disponivel"] is True
+    assert automacao["rodou_hoje"] is True
+    assert automacao["recentes"][0]["status"] == "pulado_fora_de_pregao"
+    # "pulou" sem o motivo seria o mesmo silêncio de antes.
+    assert automacao["recentes"][0]["detalhe"]["janela"]["motivo"] == "feriado: Natal"
+    _sem_escrita(cursor, conn)
+
+
+def test_automacao_separa_nao_rodou_de_pulou():
+    """A distinção que o endpoint não conseguia fazer: sem execução nenhuma
+    hoje, `rodou_hoje` é False mesmo com coletas antigas no banco."""
+    cliente, cursor, conn, patches = _cliente(_dispatch_saude(rodou_hoje=False))
+    with patches[0], patches[1], _orcamento_de(600):
+        automacao = cliente.get("/saude-coleta").json()["automacao"]
+    assert automacao["rodou_hoje"] is False
+    assert automacao["ultima"] is None
+    _sem_escrita(cursor, conn)
+
+
+def test_automacao_lista_execucao_interrompida():
+    """Linha aberta e nunca encerrada = processo morto no meio."""
+    morta = _execucao(id_=9, status="executando", encerrado=None)
+    cliente, cursor, conn, patches = _cliente(_dispatch_saude(orfas=[morta]))
+    with patches[0], patches[1], _orcamento_de(600):
+        automacao = cliente.get("/saude-coleta").json()["automacao"]
+
+    assert [e["id"] for e in automacao["interrompidas"]] == [9]
+    assert automacao["interrompidas"][0]["encerrado_em"] is None
+    _sem_escrita(cursor, conn)
+
+
+def test_automacao_degrada_sem_a_migracao_007():
+    """O banco gerenciado já esteve atrás das migrações, e é justamente
+    nesse estado que se abre esta tela. 500 apagaria a resposta junto com a
+    pergunta."""
+    cliente, cursor, conn, patches = _cliente(_dispatch_saude(
+        tem_tabela_execucao=False,
+    ))
+    with patches[0], patches[1], _orcamento_de(600):
+        resposta = cliente.get("/saude-coleta")
+
+    assert resposta.status_code == 200
+    automacao = resposta.json()["automacao"]
+    assert automacao["disponivel"] is False
+    assert automacao["calendario"] is None
+    _sem_escrita(cursor, conn)
+
+
+def test_automacao_marca_os_anos_derivados_do_calendario():
+    """Derivado não pode passar por conferido — mesma disciplina de
+    `earnings`, onde estimativa nunca vira confirmação."""
+    cliente, cursor, conn, patches = _cliente(_dispatch_saude())
+    with patches[0], patches[1], _orcamento_de(600):
+        cal = cliente.get("/saude-coleta").json()["automacao"]["calendario"]
+
+    assert cal["erro"] is None
+    assert 2026 in cal["anos_conferidos"]
+    assert set(cal["anos_conferidos"]) & set(cal["anos_derivados"]) == set()
     _sem_escrita(cursor, conn)
 
 
