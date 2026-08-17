@@ -51,8 +51,8 @@ locals {
   })
 }
 
-# checkov:skip=CKV_AWS_136:AES256 is the selected nonsecret registry encryption mode for this personal deployment.
 resource "aws_ecr_repository" "runtime" {
+  #checkov:skip=CKV_AWS_136:AES256 is the selected nonsecret registry encryption mode for this personal deployment.
   for_each = var.repository_names
 
   name                 = each.value

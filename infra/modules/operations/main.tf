@@ -37,6 +37,8 @@ data "aws_availability_zones" "available" {
 }
 
 resource "aws_vpc" "operations" {
+  #checkov:skip=CKV2_AWS_11:VPC flow logs add ongoing cost and are outside this personal low-volume deployment; ECS and application logs remain enabled.
+  #checkov:skip=CKV2_AWS_12:The AWS default security group is not used by the task definition; the dedicated task security group has no ingress.
   cidr_block           = var.vpc_cidr
   enable_dns_hostnames = true
   enable_dns_support   = true
@@ -49,6 +51,7 @@ resource "aws_internet_gateway" "operations" {
 }
 
 resource "aws_subnet" "public" {
+  #checkov:skip=CKV_AWS_130:Fargate tasks intentionally use public subnets with public IPs to avoid a NAT gateway in this low-volume deployment.
   count = 2
 
   vpc_id                  = aws_vpc.operations.id
@@ -78,6 +81,7 @@ resource "aws_route_table_association" "public" {
 }
 
 resource "aws_security_group" "tasks" {
+  #checkov:skip=CKV2_AWS_5:Terraform passes this security group through the ECS task network configuration in the production module; Checkov cannot resolve that module-level attachment.
   name        = "${local.cluster_name}-egress"
   description = "No ingress; outbound TLS, Neon and configured SMTP only"
   vpc_id      = aws_vpc.operations.id
@@ -113,6 +117,7 @@ resource "aws_vpc_security_group_egress_rule" "smtp" {
 }
 
 resource "aws_ecs_cluster" "operations" {
+  #checkov:skip=CKV_AWS_65:Container Insights adds fixed and per-event cost; structured task logs and explicit execution metrics cover this personal deployment.
   name = local.cluster_name
 
   setting {
@@ -190,8 +195,9 @@ resource "aws_iam_role_policy" "execution" {
   policy = data.aws_iam_policy_document.execution.json
 }
 
-# checkov:skip=CKV_AWS_158:AWS-managed CloudWatch encryption avoids a dedicated KMS key and fixed administration for personal logs.
 resource "aws_cloudwatch_log_group" "operations" {
+  #checkov:skip=CKV_AWS_158:AWS-managed CloudWatch encryption avoids a dedicated KMS key and fixed administration for personal logs.
+  #checkov:skip=CKV_AWS_338:Thirty-day retention is the documented cost-conscious policy for this personal operational log.
   name              = "/ecs/${local.cluster_name}"
   retention_in_days = var.log_retention_days
   tags              = var.tags

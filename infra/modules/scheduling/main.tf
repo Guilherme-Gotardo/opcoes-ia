@@ -76,6 +76,7 @@ resource "aws_iam_role_policy" "scheduler" {
 }
 
 resource "aws_scheduler_schedule" "flow" {
+  #checkov:skip=CKV_AWS_297:Schedule input contains only a fixed operation name and trigger metadata; a customer-managed KMS key is not justified for this low-volume control plane.
   for_each = local.schedules
 
   name                         = "${var.name_prefix}-${each.key}"
@@ -129,8 +130,9 @@ resource "aws_scheduler_schedule" "flow" {
 
 # Captures every stopped task, including launch failures that happen before the
 # application can open an execution row in Neon. Metrics/alarms classify exits.
-# checkov:skip=CKV_AWS_158:AWS-managed encryption avoids a dedicated KMS key for low-volume operational events.
 resource "aws_cloudwatch_log_group" "task_state" {
+  #checkov:skip=CKV_AWS_158:AWS-managed encryption avoids a dedicated KMS key for low-volume operational events.
+  #checkov:skip=CKV_AWS_338:Thirty-day retention is the documented cost-conscious policy for this personal operational log.
   name              = "/aws/events/${var.name_prefix}-task-state"
   retention_in_days = var.log_retention_days
   tags              = var.tags

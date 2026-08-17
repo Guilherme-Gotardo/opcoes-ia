@@ -21,6 +21,7 @@ resource "aws_sesv2_email_identity" "sender" {
 # band: without it, deleting this user fails while a key Terraform never saw
 # still exists, and the documented rollback would stall.
 resource "aws_iam_user" "smtp" {
+  #checkov:skip=CKV_AWS_273:Amazon SES SMTP authentication requires a dedicated IAM access-key principal; the user is send-only and created for this channel.
   name          = "${var.name_prefix}-smtp"
   force_destroy = true
 
@@ -47,6 +48,7 @@ data "aws_iam_policy_document" "send_only" {
 }
 
 resource "aws_iam_user_policy" "send_only" {
+  #checkov:skip=CKV_AWS_40:The SES SMTP credential must authorize only its dedicated IAM user; the policy is one action scoped to one verified identity.
   name   = "smtp-send-only"
   user   = aws_iam_user.smtp.name
   policy = data.aws_iam_policy_document.send_only.json

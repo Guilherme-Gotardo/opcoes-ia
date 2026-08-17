@@ -7,10 +7,12 @@ data "aws_iam_openid_connect_provider" "github_actions" {
   url = "https://token.actions.githubusercontent.com"
 }
 
-# checkov:skip=CKV_AWS_18:CloudFront access logs add another bucket and are not justified for this personal low-volume static site.
-# checkov:skip=CKV_AWS_144:The versioned source bucket and reproducible build are sufficient; cross-region replication is outside this single-region deployment.
-# checkov:skip=CKV_AWS_145:SSE-S3 is the selected encryption mode for public, nonsecret static assets.
 resource "aws_s3_bucket" "web" {
+  #checkov:skip=CKV_AWS_18:CloudFront access logs add another bucket and are not justified for this personal low-volume static site.
+  #checkov:skip=CKV_AWS_144:The versioned source bucket and reproducible build are sufficient; cross-region replication is outside this single-region deployment.
+  #checkov:skip=CKV_AWS_145:SSE-S3 is the selected encryption mode for public, nonsecret static assets.
+  #checkov:skip=CKV2_AWS_61:Content-addressed frontend assets are replaced by releases and do not need an S3 lifecycle policy.
+  #checkov:skip=CKV2_AWS_62:The bucket is a CloudFront origin; it has no application event-notification workflow.
   bucket        = local.bucket_name
   force_destroy = false
 
@@ -104,10 +106,15 @@ resource "aws_cloudfront_cache_policy" "assets" {
   }
 }
 
-# checkov:skip=CKV_AWS_68:AWS WAF has fixed cost disproportionate to a static personal single-user frontend with no dynamic origin.
-# checkov:skip=CKV_AWS_86:CloudFront access logging is deliberately omitted for this low-volume static site.
-# checkov:skip=CKV_AWS_174:The default cloudfront.net certificate fixes this field at TLSv1; enforcing TLSv1.2 requires a custom domain and ACM certificate.
 resource "aws_cloudfront_distribution" "web" {
+  #checkov:skip=CKV_AWS_68:AWS WAF has fixed cost disproportionate to a static personal single-user frontend with no dynamic origin.
+  #checkov:skip=CKV_AWS_86:CloudFront access logging is deliberately omitted for this low-volume static site.
+  #checkov:skip=CKV_AWS_174:The default cloudfront.net certificate fixes this field at TLSv1; enforcing TLSv1.2 requires a custom domain and ACM certificate.
+  #checkov:skip=CKV_AWS_374:The frontend is intentionally global; access is constrained by Cognito at the application layer.
+  #checkov:skip=CKV_AWS_310:There is one private S3 origin and no alternate origin to fail over to.
+  #checkov:skip=CKV2_AWS_42:There is no custom domain or ACM certificate in this single-user deployment.
+  #checkov:skip=CKV2_AWS_32:The static distribution has no dynamic origin; response headers are managed by the application and browser policy.
+  #checkov:skip=CKV2_AWS_47:WAF is deliberately omitted for the same fixed-cost reason documented for CKV_AWS_68.
   enabled             = true
   is_ipv6_enabled     = true
   comment             = "${var.name_prefix} authenticated web shell"

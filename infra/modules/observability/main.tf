@@ -10,8 +10,9 @@ locals {
 }
 
 resource "aws_sns_topic" "operations" {
-  name = "${var.name_prefix}-alarms"
-  tags = var.tags
+  name              = "${var.name_prefix}-alarms"
+  kms_master_key_id = "alias/aws/sns"
+  tags              = var.tags
 }
 
 data "aws_caller_identity" "current" {}

@@ -46,14 +46,19 @@ resource "aws_iam_role_policy" "lambda" {
   policy = data.aws_iam_policy_document.lambda.json
 }
 
-# checkov:skip=CKV_AWS_158:AWS-managed CloudWatch encryption avoids a dedicated KMS key and fixed administration for personal logs.
 resource "aws_cloudwatch_log_group" "api" {
+  #checkov:skip=CKV_AWS_158:AWS-managed CloudWatch encryption avoids a dedicated KMS key and fixed administration for personal logs.
   name              = "/aws/lambda/${local.function_name}"
   retention_in_days = var.log_retention_days
   tags              = var.tags
 }
 
 resource "aws_lambda_function" "api" {
+  #checkov:skip=CKV_AWS_272:The immutable image is built and scanned in CI; AWS code-signing would require a separate signing pipeline.
+  #checkov:skip=CKV_AWS_116:Synchronous HTTP API requests have no asynchronous destination to drain into a Lambda DLQ.
+  #checkov:skip=CKV_AWS_173:The Lambda environment contains ARNs and public configuration only; credentials are fetched from Secrets Manager by the runtime.
+  #checkov:skip=CKV_AWS_117:Keeping this lightweight API outside a VPC avoids a NAT gateway; it reaches only public AWS endpoints and the API has no private network dependency.
+  #checkov:skip=CKV_AWS_50:X-Ray is not part of the low-volume single-user observability design; structured CloudWatch logs and metrics are used instead.
   function_name = local.function_name
   role          = aws_iam_role.lambda.arn
   package_type  = "Image"
@@ -132,6 +137,7 @@ resource "aws_apigatewayv2_route" "default" {
 }
 
 resource "aws_apigatewayv2_route" "health" {
+  #checkov:skip=CKV_AWS_309:Health endpoints are intentionally public so liveness checks do not require Cognito credentials.
   for_each = toset(["GET /health/live", "GET /health/ready"])
 
   api_id             = aws_apigatewayv2_api.api.id
@@ -144,6 +150,7 @@ resource "aws_apigatewayv2_route" "health" {
 # specific route, the authenticated $default route rejects OPTIONS before the
 # API Gateway CORS policy can answer it.
 resource "aws_apigatewayv2_route" "preflight" {
+  #checkov:skip=CKV_AWS_309:CORS preflight requests cannot carry the access token and must remain unauthenticated.
   api_id             = aws_apigatewayv2_api.api.id
   route_key          = "OPTIONS /{proxy+}"
   target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
@@ -151,6 +158,7 @@ resource "aws_apigatewayv2_route" "preflight" {
 }
 
 resource "aws_apigatewayv2_stage" "default" {
+  #checkov:skip=CKV_AWS_76:Application structured logs and the independent execution log provide the required low-volume operational trail.
   api_id      = aws_apigatewayv2_api.api.id
   name        = "$default"
   auto_deploy = true
