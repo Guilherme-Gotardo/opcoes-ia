@@ -123,25 +123,46 @@ cálculo de exposição, valorização ou risco de resultado.
 - **THEN** patrimônio, valor por posição e exposição por ativo são os mesmos
   nos dois, por virem da mesma função de domínio
 
-### Requirement: Acesso restrito à máquina local
-O sistema SHALL servir esta superfície apenas para a máquina local, e SHALL
-permitir requisições de origem cruzada apenas para a origem da interface de
-desenvolvimento.
+### Requirement: Acesso hospedado autenticado
+Em produção, o sistema SHALL exigir JWT emitido pelo provedor de identidade
+configurado antes de acessar qualquer endpoint protegido. A validação SHALL
+ocorrer no gateway antes da invocação do runtime e novamente no limite da
+aplicação, SHALL cobrir endpoints de leitura e escrita e SHALL NOT tratar CORS
+como mecanismo de autenticação. O sistema SHALL permitir que a interface
+estática seja carregada sem sessão, mas SHALL NOT expor dado protegido nem
+executar escrita sem JWT válido.
 
-Esta superfície não tem autenticação por decisão registrada: ela pressupõe
-uso de um único usuário sem exposição pública. O sistema SHALL NOT ser
-publicado em endereço acessível pela internet sem que essa decisão seja
-revista.
+#### Scenario: Usuário autorizado acessa pela interface publicada
+- **WHEN** uma requisição apresenta JWT válido para o cliente configurado e
+  origem CloudFront permitida
+- **THEN** a API processa a requisição normalmente
 
-#### Scenario: Origem não autorizada
-- **WHEN** uma página de origem diferente da interface configurada tenta
-  consumir a API pelo navegador
+#### Scenario: Requisição sem identidade
+- **WHEN** uma requisição chega ao hostname da API sem credencial de identidade
+  válida
+- **THEN** o gateway a recusa antes de invocar a aplicação ou acessar dados
+
+#### Scenario: Acesso direto tenta contornar o proxy
+- **WHEN** uma requisição alcança a origem da API sem passar pelo hostname
+  esperado ou com JWT destinado a outro cliente
+- **THEN** a API recusa a requisição, mesmo que sua origem conste na política de
+  CORS
+
+#### Scenario: Interface carrega sem sessão
+- **WHEN** um visitante abre o bundle estático sem sessão autenticada
+- **THEN** nenhum dado de carteira é retornado e nenhuma escrita é aceita até a
+  conclusão do login
+
+#### Scenario: Origem de navegador não autorizada
+- **WHEN** uma página de origem diferente da interface publicada tenta consumir
+  a API pelo navegador
 - **THEN** a requisição é recusada pela política de origem cruzada
 
-#### Scenario: Interface de desenvolvimento consome normalmente
-- **WHEN** a interface rodando em seu servidor de desenvolvimento consulta a
-  API
-- **THEN** a requisição é aceita
+#### Scenario: Desenvolvimento local explícito
+- **WHEN** a aplicação roda em modo de desenvolvimento local configurado
+  explicitamente
+- **THEN** ela pode aceitar a origem local sem tornar esse modo o padrão do
+  ambiente de produção
 
 ### Requirement: Contrato publicado em formato consumível por cliente tipado
 O sistema SHALL publicar a descrição do contrato desta superfície em formato
