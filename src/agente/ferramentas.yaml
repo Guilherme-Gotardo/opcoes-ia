@@ -1,0 +1,47 @@
+# Ferramentas disponíveis ao agente de relatório (Fase 3 do plano).
+#
+# SEGREDO NÃO MORA AQUI. Cada servidor declara o NOME da variável de
+# ambiente que guarda seu token, nunca o token. Este arquivo é versionado; a
+# variável vai no EnvironmentFile do systemd, com permissão 600.
+
+# Busca web — ferramenta NATIVA da Messages API, não MCP.
+#
+# O plano listava "busca web/notícia" como o primeiro MCP a conectar. Não
+# precisa: a API tem `web_search` embutida, sem servidor para hospedar, sem
+# credencial para guardar, e com citação de fonte nativa — que é justamente
+# o critério de pronto da fase. Um MCP de busca seria mais trabalho para um
+# resultado pior.
+busca_web:
+  ativo: true
+  # Busca web é cobrada por uso. Sem teto, um relatório que "quer conferir
+  # mais uma coisa" multiplica o custo sem ninguém decidir isso.
+  max_usos: 5
+
+# Servidores MCP a conectar.
+#
+# `ativo: false` deixa o servidor registrado sem tentar conectar — é a forma
+# de guardar a intenção sem pagar uma tentativa de conexão por execução.
+#
+# ATENÇÃO: declarar aqui NÃO basta. A API exige, para cada servidor, uma
+# entrada `{"type": "mcp_toolset", "mcp_server_name": <nome>}` em `tools`,
+# mais o beta `mcp-client-2025-11-20`. `src/agente/ferramentas.py` monta as
+# duas listas do mesmo laço, para não haver como declarar uma sem a outra.
+mcp_servers:
+  # O MCP da Brapi já está em `.mcp.json`, mas AQUELE arquivo é a config do
+  # Claude Code — mecanismo diferente, que não vale para a Messages API. Fica
+  # desligado por ora: metade das tools dele exige plano Startup (403 no
+  # Free), e as que funcionam (perfil, lookup de ticker) o projeto já coleta
+  # por ETL próprio. Ligar só faria o agente reconsultar o que já está no
+  # banco, gastando request do mesmo orçamento.
+  - nome: brapi
+    url: https://brapi.dev/api/mcp/mcp
+    variavel_token: BRAPI_TOKEN
+    ativo: false
+
+# NOTIFICAÇÃO NÃO ENTRA AQUI, E ISSO É DELIBERADO.
+#
+# O plano previa um MCP de Slack/e-mail/Telegram para o agente entregar o
+# relatório. Dar ao modelo uma ferramenta de ENVIO transfere a ele a decisão
+# de mandar, para quem e quantas vezes. O envio é determinístico e fica com
+# o script, depois de o agente compor o texto — a mesma fronteira que
+# mantém "nada aqui é ordem executada" verdadeira no resto do projeto.

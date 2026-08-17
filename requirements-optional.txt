@@ -19,3 +19,11 @@ yfinance>=0.2
 # Instala no Python 3.14 pelo wheel `cp39-abi3` (ABI estável) — não existe
 # wheel `cp314` para o CPython padrão, só para o build free-threaded.
 QuantLib>=1.43
+
+# Agente de relatório (src/agente/) — Messages API com busca web e MCP.
+#
+# Também opcional: `src/agente/ferramentas.py` MONTA a configuração sem
+# importar o SDK, e é isso que os testes exercitam. O SDK só é preciso na
+# hora de fazer a chamada de verdade, que exige ANTHROPIC_API_KEY e nunca
+# roda dentro do pipeline determinístico.
+anthropic>=0.122

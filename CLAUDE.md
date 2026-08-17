@@ -99,6 +99,12 @@ python -m scripts.rodar_pregao --forcar     # ignora (fica marcado no detalhe)
 # e responder True o faria avaliar num feriado sobre cotação de outro dia.
 python -m src.pregao.derivar 2026 2029 > src/pregao/feriados_b3.yaml
 
+# ferramentas do agente de relatório (Fase 3). O primeiro só MOSTRA o que
+# seria enviado, com o token mascarado; o segundo faz uma chamada real e
+# cobra o critério da fase (buscou e citou a fonte?).
+python -m src.agente.ferramentas
+ANTHROPIC_API_KEY=sk-ant-... python -m src.agente.verificar
+
 # taxa livre de risco (BCB/SGS 1178, Selic anualizada). Insumo do modelo de
 # precificação — vem de FONTE, não de parâmetro chumbado.
 python -m src.quant.taxa
@@ -142,6 +148,11 @@ docker compose up -d db
 - Pedido sobre **novo agente** → `.claude/agents/`, use `orchestrator.md` como
   referência de como os agentes se conectam
 - Pedido sobre **automação diária** → `.github/workflows/daily-etl.yml`
+- Pedido sobre **agente de IA, MCP, busca web** → `docs/AGENTE.md`, depois
+  `src/agente/ferramentas.py`. Três regras: `mcp_servers` sozinho é 400 (a
+  API exige também `tools[{type: mcp_toolset}]` e o beta), busca web é
+  ferramenta NATIVA e não precisa de MCP, e envio de notificação NÃO é
+  ferramenta do agente — é do script, depois de ele compor o texto
 - Pedido sobre **grega, preço teórico, probabilidade de exercício** →
   `docs/QUANT.md`, depois `src/quant/enrichment.py` (puro) e
   `src/quant/pipeline.py` (o que tem I/O). Regra que atravessa tudo: isto é
@@ -473,6 +484,26 @@ docker compose up -d db
       consultável direto. Enquanto `opcoes` estiver vazia não haveria o que
       mostrar, mas quando houver, isso é o que falta para o número servir a
       uma decisão humana
+- [x] **Camada de ferramentas do agente** (Fase 3 do plano, 2026-08-16):
+      `src/agente/ferramentas.py` + `ferramentas.yaml`. Ver `docs/AGENTE.md`.
+      Três correções ao plano: (a) `mcp_servers` sozinho é **erro de
+      validação** — a API exige também uma entrada
+      `tools[{type: mcp_toolset, mcp_server_name}]` por servidor mais o beta
+      `mcp-client-2025-11-20`, e um servidor sem toolset faz a requisição
+      INTEIRA ser rejeitada com 400 genérico; as duas listas passaram a sair
+      do mesmo laço, e `validar()` cobra a invariante; (b) **busca web não
+      precisa de MCP** — é ferramenta nativa (`web_search_20260209`), sem
+      servidor para hospedar, sem credencial e com citação de fonte
+      embutida, que é literalmente o critério de pronto da fase; (c) **envio
+      de notificação NÃO é ferramenta do agente** — dar ao modelo uma
+      ferramenta de envio transfere a ele a decisão de mandar, para quem e
+      quantas vezes; o envio fica determinístico no script, depois de o
+      agente compor o texto
+- [ ] **Nenhuma chamada real à Messages API foi feita** — `ANTHROPIC_API_KEY`
+      não está configurada e o CLI `ant` não está instalado. Toda a MONTAGEM
+      é testada sem chave; a viagem até a API, não. O critério de pronto da
+      Fase 3 ("buscar uma notícia real e citar a fonte") só fecha rodando
+      `python -m src.agente.verificar` com a chave no ambiente
 - [ ] **`prob_exercicio_vencimento` não inclui exercício antecipado** — mede
       só o vencimento. Para quem vende call coberta num contrato americano, a
       pergunta real é maior que essa. Sai como ressalva em toda linha
