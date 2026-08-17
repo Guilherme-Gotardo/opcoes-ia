@@ -345,6 +345,64 @@ class SaudeColetaResposta(BaseModel):
     )
 
 
+class EnriquecimentoItemResposta(BaseModel):
+    """Contexto quantitativo de UMA opção. Todo número é opcional: `None`
+    quer dizer "não deu para calcular", e `ressalvas` diz por quê."""
+
+    codigo_opcao: str
+    ticker_objeto: str
+    tipo: str | None = None
+    strike: float | None = None
+    vencimento: dt.date | None = None
+    #: Preço coletado do provedor. Fica ao lado do teórico de propósito: a
+    #: leitura útil é a DIFERENÇA entre os dois, e obrigar quem lê a buscar
+    #: o preço noutra tela é o que faz ninguém comparar.
+    preco_mercado: float | None = None
+    preco_teorico: float | None = None
+    delta_modelo: float | None = Field(
+        default=None,
+        description="Delta do MODELO. Não confundir com `opcoes.delta`, que "
+                    "vem do provedor e é o que o critério de gate consome",
+    )
+    gamma: float | None = None
+    theta_dia: float | None = Field(default=None, description="Por dia corrido")
+    vega_pp: float | None = Field(default=None, description="Por ponto percentual de vol")
+    rho_pp: float | None = Field(default=None, description="Por ponto percentual de juro")
+    prob_exercicio_vencimento: float | None = Field(
+        default=None,
+        description="Risco-neutra, SÓ no vencimento — não inclui exercício "
+                    "antecipado em contrato americano",
+    )
+    iv_percentil_252d: float | None = None
+    skew_vs_cadeia: float | None = None
+    volatilidade_usada: float | None = None
+    estilo_exercicio: str | None = None
+    ressalvas: list[str] = Field(default_factory=list)
+
+
+class EnriquecimentoResposta(BaseModel):
+    """Contexto quantitativo da última execução da avaliação.
+
+    NÃO é critério. Os números aqui não aprovaram nem reprovaram nada — quem
+    decide é `criterios_json`, em `/sugestoes` e `/desfecho`. A separação é a
+    razão de existir um recurso próprio: misturar os dois faria um número de
+    contexto parecer um critério que alguém precisou passar.
+    """
+
+    disponivel: bool = Field(
+        description="False quando a migração 008 não foi aplicada neste banco"
+    )
+    executado_em: dt.datetime | None = None
+    modelo: str | None = Field(
+        default=None, description="Ex.: 'CRR-binomial-1024'"
+    )
+    taxa_livre_risco: float | None = Field(
+        default=None, description="Fração ao ano usada no desconto"
+    )
+    taxa_observada_em: dt.date | None = None
+    itens: list[EnriquecimentoItemResposta] = Field(default_factory=list)
+
+
 class VelaResposta(BaseModel):
     abertura_em: dt.datetime = Field(
         description="INÍCIO do período, não o momento da coleta"
@@ -555,6 +613,13 @@ def desfecho(data: dt.date | None = None) -> DesfechoResposta:
             for l in linhas
         ],
     )
+
+
+def _float(valor) -> float | None:
+    """`NUMERIC` do Postgres chega como `Decimal`; Pydantic aceita, mas o
+    JSON sairia como string. Preserva `None` — que aqui significa "não deu
+    para calcular", não zero."""
+    return float(valor) if valor is not None else None
 
 
 def _como_lista(valor) -> list:
@@ -1007,6 +1072,73 @@ def operacoes() -> OperacoesResposta:
 
     return OperacoesResposta(
         operacoes=respostas, tem_cotacao_de_opcao=tem_cotacao_de_opcao
+    )
+
+
+@app.get("/enriquecimento", response_model=EnriquecimentoResposta)
+def enriquecimento() -> EnriquecimentoResposta:
+    """Contexto quantitativo da última execução da avaliação.
+
+    Uma execução por vez, não a união do dia: rodar de novo SUBSTITUI a
+    leitura. Somar rodadas mostraria a mesma opção duas vezes com números
+    ligeiramente diferentes, e ninguém saberia qual é a de agora — é a mesma
+    razão de `ultima_execucao_do_dia` existir no desfecho.
+    """
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.enriquecimento_quant')")
+        if cur.fetchone()[0] is None:
+            return EnriquecimentoResposta(disponivel=False)
+
+        cur.execute("SELECT MAX(executado_em) FROM enriquecimento_quant")
+        linha = cur.fetchone()
+        executado_em = linha[0] if linha else None
+        if executado_em is None:
+            return EnriquecimentoResposta(disponivel=True)
+
+        # O preço de mercado da opção vem de `opcoes`, na coleta mais
+        # recente: o valor da tela é a DIFERENÇA contra o teórico, e obrigar
+        # quem lê a cruzar duas telas é o que faz ninguém comparar.
+        cur.execute(
+            """
+            SELECT e.codigo_opcao, e.ticker_objeto, o.tipo, o.strike,
+                   o.vencimento, o.preco, e.preco_teorico, e.delta_modelo,
+                   e.gamma, e.theta_dia, e.vega_pp, e.rho_pp,
+                   e.prob_exercicio_vencimento, e.iv_percentil_252d,
+                   e.skew_vs_cadeia, e.volatilidade_usada, e.estilo_exercicio,
+                   e.ressalvas, e.modelo, e.taxa_livre_risco, e.taxa_observada_em
+            FROM enriquecimento_quant e
+            LEFT JOIN (
+                SELECT DISTINCT ON (codigo) codigo, tipo, strike, vencimento, preco
+                FROM opcoes ORDER BY codigo, coletado_em DESC
+            ) o ON o.codigo = e.codigo_opcao
+            WHERE e.executado_em = %s
+            ORDER BY e.ticker_objeto, o.strike NULLS LAST, e.codigo_opcao
+            """,
+            (executado_em,),
+        )
+        linhas = cur.fetchall()
+
+    itens = [
+        EnriquecimentoItemResposta(
+            codigo_opcao=r[0], ticker_objeto=r[1], tipo=r[2],
+            strike=_float(r[3]), vencimento=r[4], preco_mercado=_float(r[5]),
+            preco_teorico=_float(r[6]), delta_modelo=_float(r[7]),
+            gamma=_float(r[8]), theta_dia=_float(r[9]), vega_pp=_float(r[10]),
+            rho_pp=_float(r[11]), prob_exercicio_vencimento=_float(r[12]),
+            iv_percentil_252d=_float(r[13]), skew_vs_cadeia=_float(r[14]),
+            volatilidade_usada=_float(r[15]), estilo_exercicio=r[16],
+            ressalvas=list(r[17] or []),
+        )
+        for r in linhas
+    ]
+    primeira = linhas[0] if linhas else None
+    return EnriquecimentoResposta(
+        disponivel=True,
+        executado_em=executado_em,
+        modelo=primeira[18] if primeira else None,
+        taxa_livre_risco=_float(primeira[19]) if primeira else None,
+        taxa_observada_em=primeira[20] if primeira else None,
+        itens=itens,
     )
 
 

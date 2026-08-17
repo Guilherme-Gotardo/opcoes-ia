@@ -667,6 +667,25 @@
         }
       }
     },
+    "/enriquecimento": {
+      "get": {
+        "summary": "Enriquecimento",
+        "description": "Contexto quantitativo da última execução da avaliação.\n\nUma execução por vez, não a união do dia: rodar de novo SUBSTITUI a\nleitura. Somar rodadas mostraria a mesma opção duas vezes com números\nligeiramente diferentes, e ninguém saberia qual é a de agora — é a mesma\nrazão de `ultima_execucao_do_dia` existir no desfecho.",
+        "operationId": "enriquecimento_enriquecimento_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnriquecimentoResposta"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/parametros": {
       "get": {
         "summary": "Parametros",
@@ -1262,6 +1281,273 @@
         "type": "object",
         "title": "EncerramentoEntrada",
         "description": "Como a posição fechou — obrigatório porque o resultado depende disso.\n\n`fechada_em` sozinho diz QUANDO fechou e nunca COMO: expirada rende o\nprêmio inteiro, recomprada rende o prêmio menos a recompra, exercida\natravessa duas categorias fiscais."
+      },
+      "EnriquecimentoItemResposta": {
+        "properties": {
+          "codigo_opcao": {
+            "type": "string",
+            "title": "Codigo Opcao"
+          },
+          "ticker_objeto": {
+            "type": "string",
+            "title": "Ticker Objeto"
+          },
+          "tipo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tipo"
+          },
+          "strike": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strike"
+          },
+          "vencimento": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vencimento"
+          },
+          "preco_mercado": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preco Mercado"
+          },
+          "preco_teorico": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preco Teorico"
+          },
+          "delta_modelo": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta Modelo",
+            "description": "Delta do MODELO. Não confundir com `opcoes.delta`, que vem do provedor e é o que o critério de gate consome"
+          },
+          "gamma": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gamma"
+          },
+          "theta_dia": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Theta Dia",
+            "description": "Por dia corrido"
+          },
+          "vega_pp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vega Pp",
+            "description": "Por ponto percentual de vol"
+          },
+          "rho_pp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rho Pp",
+            "description": "Por ponto percentual de juro"
+          },
+          "prob_exercicio_vencimento": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prob Exercicio Vencimento",
+            "description": "Risco-neutra, SÓ no vencimento — não inclui exercício antecipado em contrato americano"
+          },
+          "iv_percentil_252d": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Iv Percentil 252D"
+          },
+          "skew_vs_cadeia": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skew Vs Cadeia"
+          },
+          "volatilidade_usada": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volatilidade Usada"
+          },
+          "estilo_exercicio": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estilo Exercicio"
+          },
+          "ressalvas": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Ressalvas"
+          }
+        },
+        "type": "object",
+        "required": [
+          "codigo_opcao",
+          "ticker_objeto"
+        ],
+        "title": "EnriquecimentoItemResposta",
+        "description": "Contexto quantitativo de UMA opção. Todo número é opcional: `None`\nquer dizer \"não deu para calcular\", e `ressalvas` diz por quê."
+      },
+      "EnriquecimentoResposta": {
+        "properties": {
+          "disponivel": {
+            "type": "boolean",
+            "title": "Disponivel",
+            "description": "False quando a migração 008 não foi aplicada neste banco"
+          },
+          "executado_em": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executado Em"
+          },
+          "modelo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Modelo",
+            "description": "Ex.: 'CRR-binomial-1024'"
+          },
+          "taxa_livre_risco": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Taxa Livre Risco",
+            "description": "Fração ao ano usada no desconto"
+          },
+          "taxa_observada_em": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Taxa Observada Em"
+          },
+          "itens": {
+            "items": {
+              "$ref": "#/components/schemas/EnriquecimentoItemResposta"
+            },
+            "type": "array",
+            "title": "Itens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "disponivel"
+        ],
+        "title": "EnriquecimentoResposta",
+        "description": "Contexto quantitativo da última execução da avaliação.\n\nNÃO é critério. Os números aqui não aprovaram nem reprovaram nada — quem\ndecide é `criterios_json`, em `/sugestoes` e `/desfecho`. A separação é a\nrazão de existir um recurso próprio: misturar os dois faria um número de\ncontexto parecer um critério que alguém precisou passar."
       },
       "EventoResultadoResposta": {
         "properties": {

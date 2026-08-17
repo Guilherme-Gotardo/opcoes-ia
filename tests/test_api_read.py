@@ -576,6 +576,109 @@ def test_automacao_marca_os_anos_derivados_do_calendario():
     _sem_escrita(cursor, conn)
 
 
+# --- /enriquecimento --------------------------------------------------------
+
+#: Ordem das colunas do SELECT do endpoint.
+def _linha_enriquecimento(codigo="PETRI420", **troca):
+    campos = dict(
+        codigo_opcao=codigo, ticker_objeto="PETR4", tipo="CALL", strike=42.0,
+        vencimento=dt.date(2026, 9, 20), preco_mercado=1.85, preco_teorico=1.91,
+        delta_modelo=0.58, gamma=0.075, theta_dia=-0.023, vega_pp=0.064,
+        rho_pp=0.027, prob=0.545, percentil=0.72, skew=0.009, vol=0.31,
+        estilo="americana", ressalvas=["uma ressalva"],
+        modelo="CRR-binomial-1024", taxa=0.139, taxa_em=dt.date(2026, 8, 14),
+    )
+    campos.update(troca)
+    return tuple(campos.values())
+
+
+def _dispatch_enriquecimento(linhas=(), executado_em=AGORA, tem_tabela=True):
+    def dispatch(query, params):
+        if "to_regclass" in query:
+            return ("enriquecimento_quant",) if tem_tabela else (None,)
+        if "MAX(executado_em)" in query:
+            return (executado_em,)
+        if "FROM enriquecimento_quant" in query:
+            return list(linhas)
+        raise AssertionError(f"query não esperada: {query}")
+    return dispatch
+
+
+def test_enriquecimento_expoe_contexto_com_a_auditoria_junto():
+    cliente, cursor, conn, patches = _cliente(
+        _dispatch_enriquecimento([_linha_enriquecimento()])
+    )
+    with patches[0], patches[1]:
+        corpo = cliente.get("/enriquecimento").json()
+
+    assert corpo["disponivel"] is True
+    # Sem estes três, o número é irreconstruível meses depois.
+    assert corpo["modelo"] == "CRR-binomial-1024"
+    assert corpo["taxa_livre_risco"] == 0.139
+    assert corpo["taxa_observada_em"] == "2026-08-14"
+
+    item = corpo["itens"][0]
+    assert item["codigo_opcao"] == "PETRI420"
+    assert item["estilo_exercicio"] == "americana"
+    assert item["ressalvas"] == ["uma ressalva"]
+    _sem_escrita(cursor, conn)
+
+
+def test_enriquecimento_traz_preco_de_mercado_ao_lado_do_teorico():
+    """A leitura útil é a DIFERENÇA entre os dois. Obrigar quem lê a cruzar
+    duas telas é o que faz ninguém comparar."""
+    cliente, cursor, conn, patches = _cliente(
+        _dispatch_enriquecimento([_linha_enriquecimento()])
+    )
+    with patches[0], patches[1]:
+        item = cliente.get("/enriquecimento").json()["itens"][0]
+
+    assert item["preco_mercado"] == 1.85
+    assert item["preco_teorico"] == 1.91
+    _sem_escrita(cursor, conn)
+
+
+def test_enriquecimento_preserva_none_em_vez_de_virar_zero():
+    """`None` aqui significa "não deu para calcular". Virar 0.0 faria um
+    campo ausente parecer um delta neutro calculado de verdade."""
+    cliente, cursor, conn, patches = _cliente(_dispatch_enriquecimento(
+        [_linha_enriquecimento(delta_modelo=None, preco_teorico=None,
+                               ressalvas=["sem modelo: faltam volatilidade implícita"])]
+    ))
+    with patches[0], patches[1]:
+        item = cliente.get("/enriquecimento").json()["itens"][0]
+
+    assert item["delta_modelo"] is None
+    assert item["preco_teorico"] is None
+    assert "volatilidade" in item["ressalvas"][0]
+    _sem_escrita(cursor, conn)
+
+
+def test_enriquecimento_sem_execucao_nenhuma():
+    cliente, cursor, conn, patches = _cliente(
+        _dispatch_enriquecimento(executado_em=None)
+    )
+    with patches[0], patches[1]:
+        corpo = cliente.get("/enriquecimento").json()
+
+    assert corpo["disponivel"] is True
+    assert corpo["itens"] == []
+    assert corpo["executado_em"] is None
+    _sem_escrita(cursor, conn)
+
+
+def test_enriquecimento_degrada_sem_a_migracao_008():
+    cliente, cursor, conn, patches = _cliente(
+        _dispatch_enriquecimento(tem_tabela=False)
+    )
+    with patches[0], patches[1]:
+        resposta = cliente.get("/enriquecimento")
+
+    assert resposta.status_code == 200
+    assert resposta.json()["disponivel"] is False
+    _sem_escrita(cursor, conn)
+
+
 # --- /parametros ------------------------------------------------------------
 
 def test_parametros_expoem_frescor_e_politica():
