@@ -308,6 +308,50 @@ def test_falha_smtp_preserva_relatorios_persistidos():
         chamada.assert_not_called()
 
 
+def test_carimbo_da_avaliacao_vem_do_relogio_da_execucao():
+    """A avaliação carimba o instante da EXECUÇÃO, não um `now()` novo.
+
+    `janela` e `data` saem de `agora`, e o agente lê o insumo POR DATA. Um
+    segundo relógio dentro do mesmo fluxo grava sugestão e desfecho num dia
+    enquanto a leitura procura no outro: o insumo sai vazio, a etapa do
+    agente é pulada como "sem_avaliacao_persistida" e o dia fica sem
+    relatório — sem nada falhar. Uma execução que atravesse a virada do dia
+    cai exatamente nisso, e foi assim que o CI quebrou: a suíte passava
+    enquanto a data real coincidia com a injetada aqui.
+    """
+    carimbos = {}
+    recebido = {}
+
+    def avaliar(executado_em):
+        carimbos["avaliacao"] = executado_em
+        return _avaliar_persistindo(executado_em)
+
+    def compor(insumo):
+        recebido["insumo"] = insumo
+        return Relatorio("Leitura.", "teste")
+
+    patches = _patches_daily(compor=compor)
+    with patches[0], patches[1], patches[2], patches[3], patches[4], \
+         patch(
+             "src.strategy.covered.executar_avaliacao_carteira",
+             side_effect=avaliar,
+         ), \
+         patches[6], patches[7], patches[8]:
+        resultado = mod.executar_daily(agora=AGORA)
+
+    assert resultado.codigo_saida == 0
+    assert carimbos["avaliacao"] == AGORA
+    with psycopg.connect(os.environ["DATABASE_URL"]) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT executado_em FROM desfecho_avaliacao WHERE ticker_objeto = 'ZZOPS'"
+        )
+        assert cur.fetchone()[0] == AGORA, "o que foi gravado carrega o mesmo instante"
+
+    # E o outro lado da ponte: o agente encontra o que a avaliação gravou.
+    assert recebido["insumo"].data == DATA.isoformat()
+    assert [s["codigo_opcao"] for s in recebido["insumo"].sugestoes] == ["ZZOPSA1"]
+
+
 def test_agente_recebe_insumo_persistido_com_vereditos_sem_campos_crus():
     recebido = {}
 

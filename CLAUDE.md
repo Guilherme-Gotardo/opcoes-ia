@@ -421,6 +421,19 @@ docker compose up -d db
       de cartão reusou o nome — as duas regras casavam no mesmo seletor, e
       o formulário da watchlist herdava fundo e fonte mono enquanto o
       `<pre>` virava flex; a antiga passou a se chamar `.codigo`
+- [x] **Um relógio por execução no orquestrador** (2026-08-18): as etapas de
+      avaliação de `intraday` e `daily` liam `dt.datetime.now()` de novo para
+      carimbar sugestão e desfecho, enquanto `janela` e `data` saem de `agora`.
+      O agente lê o insumo POR DATA: com os dois relógios divergindo, a
+      avaliação grava num dia e a leitura procura no outro, o insumo sai
+      vazio, a etapa do agente é pulada como `sem_avaliacao_persistida` e o
+      dia fica sem relatório — **sem nada falhar**. Uma execução que
+      atravesse a virada do dia cai exatamente nisso. Só apareceu porque o
+      CI rodou depois da meia-noite UTC e a data real deixou de coincidir
+      com a injetada nos testes; até ali a suíte passava por coincidência de
+      calendário, não por cobertura. `executado_em = agora` nos dois fluxos,
+      e `test_carimbo_da_avaliacao_vem_do_relogio_da_execucao` cobra o
+      carimbo gravado e o insumo lido, falhando em qualquer dia
 - [ ] **Concentração da carteira não é barrada por nenhum critério** — e
       isso é deliberado. `exposicao_maxima_pct_ativo` limita opção
       descoberta, não o quanto do patrimônio está num único ativo. Quem

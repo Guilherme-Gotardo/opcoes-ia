@@ -497,7 +497,14 @@ def executar_intraday(
         if politica.status == execucao.ETAPA_PULADO:
             return op.finalizar(pulado=True, detalhe=politica.detalhe)
 
-        executado_em = dt.datetime.now(dt.timezone.utc)
+        # UM RELÓGIO POR EXECUÇÃO. Ler o relógio de novo aqui carimbava as
+        # linhas com um instante que não é o da execução: `janela` e `data`
+        # saem de `agora`, e o agente lê o insumo POR DATA. Divergindo os
+        # dois, a avaliação grava sugestão e desfecho num dia e a leitura
+        # procura no outro — o insumo sai vazio, a etapa do agente é pulada
+        # como "sem_avaliacao_persistida" e não há relatório do dia. Uma
+        # execução que atravesse a virada do dia cai exatamente nisso.
+        executado_em = agora
 
         def avaliar_carteira() -> ResultadoEtapaOperacional:
             from src.strategy.covered import executar_avaliacao_carteira
@@ -603,7 +610,14 @@ def executar_daily(
             critica=True,
         )
 
-        executado_em = dt.datetime.now(dt.timezone.utc)
+        # UM RELÓGIO POR EXECUÇÃO. Ler o relógio de novo aqui carimbava as
+        # linhas com um instante que não é o da execução: `janela` e `data`
+        # saem de `agora`, e o agente lê o insumo POR DATA. Divergindo os
+        # dois, a avaliação grava sugestão e desfecho num dia e a leitura
+        # procura no outro — o insumo sai vazio, a etapa do agente é pulada
+        # como "sem_avaliacao_persistida" e não há relatório do dia. Uma
+        # execução que atravesse a virada do dia cai exatamente nisso.
+        executado_em = agora
 
         def avaliar_carteira() -> ResultadoEtapaOperacional:
             from src.strategy.covered import executar_avaliacao_carteira
