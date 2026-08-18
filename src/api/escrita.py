@@ -42,7 +42,6 @@ from src.assets.manage import (
     add_ativo,
     list_ativos,
     parar_de_vigiar,
-    tickers_vigiados,
     universo_de_analise,
     vigiar,
 )
@@ -80,6 +79,13 @@ class AtivoResposta(BaseModel):
     tipo: str
     cnpj_raiz: str | None
     criado_em: dt.datetime
+    vigiado: bool = Field(
+        default=False,
+        description="Está na watchlist — logo, entra no universo de coleta "
+                    "mesmo sem posição",
+    )
+    vigiado_motivo: str | None = None
+    vigiado_desde: dt.datetime | None = None
 
 
 class PosicaoEntrada(BaseModel):
@@ -165,6 +171,25 @@ class VigiarEntrada(BaseModel):
     )
 
 
+class VigiadoResposta(BaseModel):
+    """Um item da watchlist com o que justifica a presença dele.
+
+    O motivo era gravado e nunca devolvido: a tela pedia "por que este
+    ticker entrou", guardava a resposta e depois mostrava só o código. A
+    pergunta que ele existe para responder aparece meses depois — e até
+    aqui não havia por onde lê-la sem abrir o banco.
+    """
+
+    ticker: str
+    nome: str
+    motivo: str | None
+    desde: dt.datetime | None
+    em_carteira: bool = Field(
+        description="Também tem posição aberta — vigiar não muda o universo "
+                    "neste caso, porque a carteira já o inclui"
+    )
+
+
 class WatchlistResposta(BaseModel):
     """A watchlist e o custo que ela impõe.
 
@@ -174,7 +199,7 @@ class WatchlistResposta(BaseModel):
     falhasse no fim do dia.
     """
 
-    vigiados: list[str]
+    vigiados: list[VigiadoResposta]
     universo: list[str] = Field(
         description="CARTEIRA ∪ VIGIADOS — o que os ETLs coletam e a "
                     "varredura percorre"
@@ -321,9 +346,31 @@ _REQUESTS_POR_TICKER_DIA = 4
 def listar_watchlist() -> WatchlistResposta:
     """Ativos vigiados e o custo que isso impõe ao orçamento diário."""
     orcamento = get_brapi_settings().brapi_requests_dia_maximo
+    universo = universo_de_analise()
+    # Carteira e watchlist se sobrepõem: um vigiado pode ter posição, e aí
+    # vigiar não acrescenta nada ao universo. Derivar isso subtraindo os
+    # vigiados do universo daria o contrário do pretendido — justamente os
+    # que estão nos dois lados sumiriam.
+    em_carteira = {
+        p["ticker"] for p in list_posicoes_abertas() if p["tipo_ativo"] == "ACAO"
+    }
+    vigiados = [
+        VigiadoResposta(
+            ticker=a["ticker"],
+            nome=a["nome"],
+            motivo=a["vigiado_motivo"],
+            desde=a["vigiado_desde"],
+            em_carteira=a["ticker"] in em_carteira,
+        )
+        # Reusa `list_ativos()` em vez de uma query própria: nome e motivo
+        # já vêm de lá, e uma segunda leitura da mesma tabela é uma segunda
+        # verdade esperando para divergir.
+        for a in list_ativos()
+        if a["vigiado"]
+    ]
     return WatchlistResposta(
-        vigiados=tickers_vigiados(),
-        universo=universo_de_analise(),
+        vigiados=vigiados,
+        universo=universo,
         requests_por_ticker_dia=_REQUESTS_POR_TICKER_DIA,
         orcamento_diario=orcamento,
         tickers_suportados=orcamento // _REQUESTS_POR_TICKER_DIA,

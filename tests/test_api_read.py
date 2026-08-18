@@ -148,15 +148,48 @@ def test_carteira_vazia_e_sucesso():
 def test_cotacoes_incluem_ativo_sem_cotacao():
     def dispatch(query, params):
         assert "LEFT JOIN LATERAL" in query
-        return [("PETR4", 42.0, AGORA), ("VALE3", None, None)]
+        return [
+            ("PETR4", 42.0, AGORA, False, None, True),
+            ("VALE3", None, None, False, None, True),
+        ]
 
     cliente, cursor, conn, patches = _cliente(dispatch)
     with patches[0], patches[1]:
         corpo = cliente.get("/cotacoes").json()
 
-    assert corpo[0] == {"ticker": "PETR4", "preco": 42.0,
-                        "coletado_em": "2026-08-16T12:00:00Z", "tem_cotacao": True}
+    assert corpo[0] == {
+        "ticker": "PETR4", "preco": 42.0,
+        "coletado_em": "2026-08-16T12:00:00Z", "tem_cotacao": True,
+        "em_carteira": True, "vigiado": False, "vigiado_motivo": None,
+        "acompanhado": True,
+    }
     assert corpo[1]["tem_cotacao"] is False, "sem cotação aparece, não é omitido"
+    _sem_escrita(cursor, conn)
+
+
+def test_cotacoes_separam_acompanhado_de_apenas_cadastrado():
+    """Sem cotação por falha de coleta e sem cotação por estar fora do
+    universo são situações diferentes — a tela mostrava as duas iguais."""
+    def dispatch(query, params):
+        return [
+            ("ABEV3", None, None, False, None, False),   # só cadastrado
+            ("ITUB4", None, None, True, "liquidez", False),  # vigiado
+            ("PETR4", 42.0, AGORA, False, None, True),   # em carteira
+        ]
+
+    cliente, cursor, conn, patches = _cliente(dispatch)
+    with patches[0], patches[1]:
+        corpo = cliente.get("/cotacoes").json()
+
+    por_ticker = {c["ticker"]: c for c in corpo}
+    assert por_ticker["ABEV3"]["acompanhado"] is False, (
+        "cadastrado e nada mais: nenhum ETL vai a ele, hoje nem amanhã"
+    )
+    assert por_ticker["ITUB4"]["acompanhado"] is True
+    assert por_ticker["ITUB4"]["vigiado_motivo"] == "liquidez"
+    assert por_ticker["PETR4"]["acompanhado"] is True, (
+        "posição aberta entra no universo mesmo sem estar vigiada"
+    )
     _sem_escrita(cursor, conn)
 
 

@@ -401,6 +401,26 @@ docker compose up -d db
       **O orçamento continua sendo o teto real**: ~4 requests/dia por
       ticker, 600/dia, ~150 tickers no total — varrer a bolsa inteira não
       cabe, e por isso a escolha é explícita
+- [x] **Watchlist ligada aos tickers observados na tela** (2026-08-17):
+      `/cotacoes` passou a devolver `em_carteira`, `vigiado`,
+      `vigiado_motivo` e `acompanhado` por linha, e `/watchlist` devolve
+      cada vigiado com nome, motivo, desde e `em_carteira` em vez de só o
+      código. O que isso conserta é uma AMBIGUIDADE, não um layout: a tela
+      listava `ativos` e cobrava cotação de todos, então um ticker apenas
+      cadastrado — que nenhum ETL visita, hoje nem amanhã — aparecia com
+      "sem cotação", indistinguível de coleta falhada. São opostos: um é
+      defeito, o outro é o comportamento correto. Agora a cobertura é
+      medida DENTRO do universo (carteira ∪ vigiados) e cada card diz por
+      qual porta o ticker entrou. O motivo do vigiado tinha o mesmo
+      problema pelo outro lado: era pedido no formulário, gravado e nunca
+      devolvido — a pergunta que ele existe para responder aparece meses
+      depois, e até aqui só o banco sabia. `acompanhado` é derivado da
+      MESMA linha já lida, não de uma segunda query, para não abrir espaço
+      de divergência com `universo_de_analise()`. Achado do caminho: a
+      classe CSS `.bloco` já existia como `<pre>` de comando e a seção nova
+      de cartão reusou o nome — as duas regras casavam no mesmo seletor, e
+      o formulário da watchlist herdava fundo e fonte mono enquanto o
+      `<pre>` virava flex; a antiga passou a se chamar `.codigo`
 - [ ] **Concentração da carteira não é barrada por nenhum critério** — e
       isso é deliberado. `exposicao_maxima_pct_ativo` limita opção
       descoberta, não o quanto do patrimônio está num único ativo. Quem

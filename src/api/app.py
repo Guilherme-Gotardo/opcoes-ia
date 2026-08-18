@@ -243,10 +243,36 @@ class CarteiraResposta(BaseModel):
 
 
 class CotacaoResposta(BaseModel):
+    """Um ativo cadastrado e o preço mais recente dele — se houver.
+
+    `acompanhado` é o campo que separa duas ausências que a tela mostrava
+    iguais: um ticker do UNIVERSO (carteira ∪ vigiados) sem preço é falha
+    de coleta; um ticker apenas cadastrado sem preço é o comportamento
+    correto — nenhum ETL vai a ele, hoje nem amanhã, até entrar na
+    carteira ou na watchlist.
+    """
+
     ticker: str
     preco: float | None
     coletado_em: dt.datetime | None
     tem_cotacao: bool
+    em_carteira: bool = Field(
+        default=False,
+        description="Tem posição em ação aberta — entra no universo mesmo "
+                    "sem estar vigiado, senão parar de vigiar deixaria a "
+                    "posição sem preço",
+    )
+    vigiado: bool = Field(
+        default=False, description="Está na watchlist (`ativos.vigiado`)"
+    )
+    vigiado_motivo: str | None = Field(
+        default=None, description="Por que entrou na watchlist"
+    )
+    acompanhado: bool = Field(
+        default=False,
+        description="CARTEIRA ∪ VIGIADOS: é o que os ETLs coletam e a "
+                    "varredura percorre. False = cadastrado e nada mais",
+    )
 
 
 class SugestaoResposta(BaseModel):
@@ -746,11 +772,24 @@ def carteira() -> CarteiraResposta:
 @app.get("/cotacoes", response_model=list[CotacaoResposta])
 def cotacoes() -> list[CotacaoResposta]:
     """Cotação mais recente de cada ativo cadastrado — inclusive os SEM
-    cotação, representados explicitamente em vez de omitidos."""
+    cotação, representados explicitamente em vez de omitidos.
+
+    Cada linha diz também se o ticker está no UNIVERSO de coleta
+    (`acompanhado` = carteira ∪ vigiados) e por qual das duas portas
+    entrou. Sem isso, "cadastrado" e "acompanhado" viravam a mesma coisa na
+    tela, e um ativo que nunca será coletado aparecia como coleta falhada.
+    """
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT a.ticker, c.preco, c.coletado_em
+            SELECT a.ticker, c.preco, c.coletado_em,
+                   a.vigiado, a.vigiado_motivo,
+                   EXISTS (
+                       SELECT 1 FROM posicoes p
+                        WHERE p.ticker = a.ticker
+                          AND p.tipo_ativo = 'ACAO'
+                          AND p.fechada_em IS NULL
+                   ) AS em_carteira
             FROM ativos a
             LEFT JOIN LATERAL (
                 SELECT preco, coletado_em FROM cotacoes
@@ -766,8 +805,15 @@ def cotacoes() -> list[CotacaoResposta]:
             preco=float(preco) if preco is not None else None,
             coletado_em=momento,
             tem_cotacao=preco is not None,
+            em_carteira=em_carteira,
+            vigiado=vigiado,
+            vigiado_motivo=motivo,
+            # A mesma união de `universo_de_analise()`, derivada aqui da
+            # linha que já foi lida — repetir a query só para reafirmar a
+            # regra abriria espaço para as duas divergirem.
+            acompanhado=bool(vigiado or em_carteira),
         )
-        for t, preco, momento in linhas
+        for t, preco, momento, vigiado, motivo, em_carteira in linhas
     ]
 
 

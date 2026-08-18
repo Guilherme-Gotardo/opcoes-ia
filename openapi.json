@@ -581,7 +581,7 @@
     "/cotacoes": {
       "get": {
         "summary": "Cotacoes",
-        "description": "Cotação mais recente de cada ativo cadastrado — inclusive os SEM\ncotação, representados explicitamente em vez de omitidos.",
+        "description": "Cotação mais recente de cada ativo cadastrado — inclusive os SEM\ncotação, representados explicitamente em vez de omitidos.\n\nCada linha diz também se o ticker está no UNIVERSO de coleta\n(`acompanhado` = carteira ∪ vigiados) e por qual das duas portas\nentrou. Sem isso, \"cadastrado\" e \"acompanhado\" viravam a mesma coisa na\ntela, e um ativo que nunca será coletado aparecia como coleta falhada.",
         "operationId": "cotacoes_cotacoes_get",
         "responses": {
           "200": {
@@ -964,6 +964,35 @@
             "type": "string",
             "format": "date-time",
             "title": "Criado Em"
+          },
+          "vigiado": {
+            "type": "boolean",
+            "title": "Vigiado",
+            "description": "Está na watchlist — logo, entra no universo de coleta mesmo sem posição",
+            "default": false
+          },
+          "vigiado_motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vigiado Motivo"
+          },
+          "vigiado_desde": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vigiado Desde"
           }
         },
         "type": "object",
@@ -1401,6 +1430,36 @@
           "tem_cotacao": {
             "type": "boolean",
             "title": "Tem Cotacao"
+          },
+          "em_carteira": {
+            "type": "boolean",
+            "title": "Em Carteira",
+            "description": "Tem posição em ação aberta — entra no universo mesmo sem estar vigiado, senão parar de vigiar deixaria a posição sem preço",
+            "default": false
+          },
+          "vigiado": {
+            "type": "boolean",
+            "title": "Vigiado",
+            "description": "Está na watchlist (`ativos.vigiado`)",
+            "default": false
+          },
+          "vigiado_motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vigiado Motivo",
+            "description": "Por que entrou na watchlist"
+          },
+          "acompanhado": {
+            "type": "boolean",
+            "title": "Acompanhado",
+            "description": "CARTEIRA ∪ VIGIADOS: é o que os ETLs coletam e a varredura percorre. False = cadastrado e nada mais",
+            "default": false
           }
         },
         "type": "object",
@@ -1410,7 +1469,8 @@
           "coletado_em",
           "tem_cotacao"
         ],
-        "title": "CotacaoResposta"
+        "title": "CotacaoResposta",
+        "description": "Um ativo cadastrado e o preço mais recente dele — se houver.\n\n`acompanhado` é o campo que separa duas ausências que a tela mostrava\niguais: um ticker do UNIVERSO (carteira ∪ vigiados) sem preço é falha\nde coleta; um ticker apenas cadastrado sem preço é o comportamento\ncorreto — nenhum ETL vai a ele, hoje nem amanhã, até entrar na\ncarteira ou na watchlist."
       },
       "DesfechoResposta": {
         "properties": {
@@ -3042,6 +3102,56 @@
         ],
         "title": "VelaResposta"
       },
+      "VigiadoResposta": {
+        "properties": {
+          "ticker": {
+            "type": "string",
+            "title": "Ticker"
+          },
+          "nome": {
+            "type": "string",
+            "title": "Nome"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo"
+          },
+          "desde": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Desde"
+          },
+          "em_carteira": {
+            "type": "boolean",
+            "title": "Em Carteira",
+            "description": "Também tem posição aberta — vigiar não muda o universo neste caso, porque a carteira já o inclui"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ticker",
+          "nome",
+          "motivo",
+          "desde",
+          "em_carteira"
+        ],
+        "title": "VigiadoResposta",
+        "description": "Um item da watchlist com o que justifica a presença dele.\n\nO motivo era gravado e nunca devolvido: a tela pedia \"por que este\nticker entrou\", guardava a resposta e depois mostrava só o código. A\npergunta que ele existe para responder aparece meses depois — e até\naqui não havia por onde lê-la sem abrir o banco."
+      },
       "VigiarEntrada": {
         "properties": {
           "ticker": {
@@ -3071,7 +3181,7 @@
         "properties": {
           "vigiados": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/VigiadoResposta"
             },
             "type": "array",
             "title": "Vigiados"

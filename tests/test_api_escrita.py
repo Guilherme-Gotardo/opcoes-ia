@@ -172,16 +172,54 @@ def test_watchlist_mostra_o_custo_junto_da_lista():
     descobrir o limite quando a coleta da carteira falhasse no fim do dia."""
     from types import SimpleNamespace
 
-    with patch.object(escrita, "tickers_vigiados", return_value=["ITUB4", "BBAS3"]), \
+    ativos = [
+        {"ticker": "BBAS3", "nome": "Banco do Brasil ON", "vigiado": True,
+         "vigiado_motivo": "dividendo", "vigiado_desde": None},
+        {"ticker": "ITUB4", "nome": "Itau Unibanco PN", "vigiado": True,
+         "vigiado_motivo": None, "vigiado_desde": None},
+        {"ticker": "PETR4", "nome": "Petrobras PN", "vigiado": False,
+         "vigiado_motivo": None, "vigiado_desde": None},
+    ]
+    with patch.object(escrita, "list_ativos", return_value=ativos), \
+         patch.object(escrita, "list_posicoes_abertas",
+                      return_value=[{"ticker": "PETR4", "tipo_ativo": "ACAO"}]), \
          patch.object(escrita, "universo_de_analise",
                       return_value=["BBAS3", "ITUB4", "PETR4"]), \
          patch.object(escrita, "get_brapi_settings",
                       return_value=SimpleNamespace(brapi_requests_dia_maximo=600)):
         corpo = cliente.get("/watchlist").json()
 
-    assert corpo["vigiados"] == ["ITUB4", "BBAS3"]
+    assert [v["ticker"] for v in corpo["vigiados"]] == ["BBAS3", "ITUB4"]
     assert corpo["universo"] == ["BBAS3", "ITUB4", "PETR4"], "carteira ∪ vigiados"
     assert corpo["tickers_suportados"] == 150, "600 / 4 requests por ticker"
+
+
+def test_watchlist_devolve_o_motivo_que_a_tela_pediu():
+    """O motivo era gravado e nunca lido: a tela perguntava "por que este
+    ticker entrou" e depois mostrava só o código."""
+    from types import SimpleNamespace
+
+    ativos = [
+        {"ticker": "ITUB4", "nome": "Itau Unibanco PN", "vigiado": True,
+         "vigiado_motivo": "liquidez alta em opções", "vigiado_desde": None},
+        {"ticker": "PETR4", "nome": "Petrobras PN", "vigiado": True,
+         "vigiado_motivo": None, "vigiado_desde": None},
+    ]
+    with patch.object(escrita, "list_ativos", return_value=ativos), \
+         patch.object(escrita, "list_posicoes_abertas",
+                      return_value=[{"ticker": "PETR4", "tipo_ativo": "ACAO"}]), \
+         patch.object(escrita, "universo_de_analise", return_value=["ITUB4", "PETR4"]), \
+         patch.object(escrita, "get_brapi_settings",
+                      return_value=SimpleNamespace(brapi_requests_dia_maximo=600)):
+        vigiados = cliente.get("/watchlist").json()["vigiados"]
+
+    por_ticker = {v["ticker"]: v for v in vigiados}
+    assert por_ticker["ITUB4"]["motivo"] == "liquidez alta em opções"
+    assert por_ticker["ITUB4"]["em_carteira"] is False
+    assert por_ticker["PETR4"]["em_carteira"] is True, (
+        "vigiado que também tem posição não some — vigiar só não acrescenta "
+        "nada ao universo neste caso"
+    )
 
 
 def test_vigiar_ativo_nao_cadastrado_devolve_o_comando():
